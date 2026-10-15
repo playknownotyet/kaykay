@@ -22,6 +22,16 @@ Bunları **sadece sen** eklersin: şifreleri ve anahtarları kimseye (Claude dah
 
 ---
 
+## Adım 0 (önerilir): Secret'sız deneme
+
+Apple işlerine girişmeden önce oyunun Mac'te derlenebildiğini görmek için:
+
+1. https://github.com/playknownotyet/kaykay/actions → soldan **iOS TestFlight** → **Run workflow**.
+2. **mod** kutusunda **`deneme`** seç → yeşil **Run workflow**.
+3. Yeşil tik çıkarsa Godot → Xcode kısmı sorunsuz demektir. Kırmızıysa hatayı Claude'a göster.
+
+Bu modda imza ve yükleme yapılmaz, hiçbir secret gerekmez (yine Mac dakikası harcar).
+
 ## Adım 1: Team ID'ni bul
 
 1. https://developer.apple.com/account adresine gir.
@@ -139,7 +149,8 @@ Adlar büyük/küçük harf dahil **birebir** aynı olmalı. Toplam 7 secret.
 ## Adım 8: Derlemeyi başlat
 
 1. https://github.com/playknownotyet/kaykay/actions adresine gir.
-2. Soldan **iOS TestFlight** → sağda **Run workflow** → Branch: `main` → yeşil **Run workflow**.
+2. Soldan **iOS TestFlight** → sağda **Run workflow** → Branch: `main`, **mod:** `testflight` → yeşil **Run workflow**.
+   (`ipa` modu imzalı dosyayı yapar ama yüklemez; sadece sorun ararken lazım olur.)
 3. 10-15 dakika bekle. Yeşil tik = başarılı. Kırmızı çarpı = aşağıdaki "Sorun çıkarsa" bölümüne bak.
 
 ## Adım 9: iPhone'a kur
