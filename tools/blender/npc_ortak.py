@@ -32,6 +32,7 @@ PALETTE = {
     # Türün kendi renkleri (tür dosyası PALETTE'i günceller; Godot tür paletinden boyar)
     "ten": (0.6, 0.6, 0.6), "ten2": (0.9, 0.9, 0.9), "ten3": (0.3, 0.25, 0.2), "iris": (0.45, 0.3, 0.12),
     "tirnak": (0.2, 0.18, 0.16), "tasma": (0.75, 0.15, 0.12), "dil": (0.88, 0.45, 0.5),
+    "kanat": (0.8, 0.85, 0.9), "damar": (0.32, 0.34, 0.38),
     # Sabit
     "goz": (0.03, 0.025, 0.025), "goz_ak": (0.95, 0.94, 0.9), "parlak": (1.0, 1.0, 1.0),
     "beyaz": (0.95, 0.93, 0.88), "gaga": (0.95, 0.6, 0.15), "siyah": (0.07, 0.07, 0.08),
@@ -777,6 +778,18 @@ def hand(m, B, side, mat="ten", fingers=4, finger_len=0.05, finger_r=0.01, palm_
 # ---------------------------------------------------------------------------
 # Göz
 # ---------------------------------------------------------------------------
+def on_surface(bm, guess, normal, sink=0.35, r=0.0):
+    """Tahmini bir noktayı, verilen yönden ışın atarak bmesh yüzeyine oturtur
+    (göz / burun gibi parçalar kafanın içinde kalmasın ya da havada durmasın).
+    Dönüş: yüzey noktası - normal * (r * sink)."""
+    from mathutils.bvhtree import BVHTree
+    n = Vector(normal).normalized()
+    tree = BVHTree.FromBMesh(bm)
+    hit = tree.ray_cast(Vector(guess) + n * 0.3, -n, 0.6)
+    p = hit[0] if hit[0] is not None else Vector(guess)
+    return p - n * (r * sink)
+
+
 def eye(m, center, normal, r, up_hint=UP, grp="head", iris_k=0.62, pupil="round", lid=0.25,
         lid_mat="ten", lid_tilt=0.0, lower_lid=0.0, lower_mat=None, ak=True, lashes=0, lash_mat="ten3"):
     """Katmanlı göz: göz akı küresi, öne taşan iris ve göz bebeği kapakları, parlama

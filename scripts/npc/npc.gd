@@ -15,6 +15,10 @@ const MODELS := {
 	"tavsan": preload("res://assets/npc/tavsan.glb"),
 	"sican": preload("res://assets/npc/sican.glb"),
 	"kurbaga": preload("res://assets/npc/kurbaga.glb"),
+	"sinek": preload("res://assets/npc/sinek.glb"),
+	"papagan": preload("res://assets/npc/papagan.glb"),
+	"tilki": preload("res://assets/npc/tilki.glb"),
+	"aslan": preload("res://assets/npc/aslan.glb"),
 }
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
 
@@ -34,6 +38,7 @@ var _timer := 0.0
 var _yaw := 0.0
 var _anim_speed := 1.0                 # modelin 1x yürüyüşündeki hız (boy ölçeğiyle)
 var _springs: SpringBoneSimulator3D    # kulak / kuyruk / hortum yaylanması
+var _buzz: WingBuzz                    # sinek kanatlarının vızıldaması
 
 
 ## materials: renk -> paylaşılan malzeme önbelleği (çizim çağrısı ve bellek için)
@@ -53,6 +58,10 @@ func setup(p_recipe: Dictionary, materials: Dictionary) -> void:
 	_anim.play("idle")
 	_anim.seek(randf() * 2.0, true)
 	_setup_springs(recipe.springs)
+	if not recipe.buzz.is_empty():
+		_buzz = WingBuzz.new()
+		_buzz.bones = PackedStringArray(recipe.buzz)
+		_model.find_children("*", "Skeleton3D", true, false)[0].add_child(_buzz)
 
 
 ## Kulak, kuyruk, hortum gibi zincirler: animasyonun üstüne fiziksel yaylanma
@@ -127,6 +136,8 @@ func stumble(from_pos: Vector3) -> void:
 		_yaw = atan2(-to.x, -to.z)
 		rotation.y = _yaw
 	velocity = Vector3.ZERO
+	if _buzz:
+		_buzz.buzz(0.9)
 	_timer = _anim.get_animation("stumble").length
 	_set_state(State.STUMBLE)
 
@@ -214,3 +225,5 @@ func set_far(value: bool) -> void:
 	_anim.active = not value
 	if _springs:
 		_springs.active = not value
+	if _buzz:
+		_buzz.active = not value

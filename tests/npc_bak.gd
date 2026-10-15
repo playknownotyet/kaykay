@@ -21,7 +21,7 @@ func _ready() -> void:
 		var n := Npc.new()
 		crowd.add_child(n)
 		n.setup(NpcCatalog.make_recipe(rng, species[i]), {})
-		n.global_position = p.global_position + fwd * 4.2 + right * (i - 4) * 0.85
+		n.global_position = p.global_position + fwd * 5.2 + right * (i - (species.size() - 1) * 0.5) * 0.78
 		n.global_position.y = p.global_position.y - 0.05
 		n.rotation.y = atan2(fwd.x, fwd.z)          # oyuncuya dönük
 		n.idle_for(100.0)
