@@ -77,6 +77,7 @@ func _ready() -> void:
 		if _air_t > 0.25 or impact > 2.0:
 			_land_timer = 0.18)
 	controller.ollied.connect(_on_ollied)
+	controller.stumbled.connect(_on_stumbled)
 	controller.ollie_started.connect(func(): _start_special("ollie", 0.0))
 	controller.double_jumped.connect(func():
 		_start_special("flip", 0.0)
@@ -133,6 +134,10 @@ func _align(delta: float) -> void:
 		# Dönüşe doğru eğil (hızla artar)
 		var speed01 := clampf(absf(controller.speed) / 6.0, 0.0, 1.0)
 		lean_target = -controller.steer * deg_to_rad(lean_angle) * speed01
+	# Sarsılma: çarpmanın ilk anında kısa, hızla sönen sağa-sola sarsıntı
+	if controller.stumble_time > 0.0:
+		var k := clampf((controller.stumble_time - SkateController.STUMBLE_TIME * 0.6) / (SkateController.STUMBLE_TIME * 0.4), 0.0, 1.0)
+		lean_target += sin(_time * 17.0) * 0.2 * k
 	_lean = lerpf(_lean, lean_target, 1.0 - exp(-10.0 * delta))
 	target = target * Basis(Vector3(0, 0, 1), _lean)
 
@@ -200,7 +205,16 @@ func _setup_animation() -> void:
 	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount"]:
 		bt.add_node(st, anim.call(st))
 		bt.connect_node("state", STATES.find(st), st)
-	bt.connect_node("output", 0, "state")
+
+	# Sarsılma: o an oynayan her şeyin üstüne tek seferlik biner (ayak yere, geri biniş)
+	var shot := AnimationNodeOneShot.new()
+	shot.fadein_time = 0.06
+	shot.fadeout_time = 0.18
+	bt.add_node("sarsil_shot", shot)
+	bt.add_node("sarsil_anim", anim.call("sarsil"))
+	bt.connect_node("sarsil_shot", 0, "state")
+	bt.connect_node("sarsil_shot", 1, "sarsil_anim")
+	bt.connect_node("output", 0, "sarsil_shot")
 
 	_tree = AnimationTree.new()
 	_tree.tree_root = bt
@@ -267,6 +281,11 @@ func _update_animation() -> void:
 	_turn_blend = lerpf(_turn_blend, turn, 1.0 - exp(-8.0 * dt))
 	_tree.set("parameters/ride_speed/blend_amount", _speed_blend)
 	_tree.set("parameters/ride_turn/blend_amount", _turn_blend)
+
+
+func _on_stumbled() -> void:
+	_kick_arms(Vector2(-0.7, 1.4))
+	_tree.set("parameters/sarsil_shot/request", AnimationNodeOneShot.ONE_SHOT_REQUEST_FIRE)
 
 
 # ---------- Zıplamalar ----------

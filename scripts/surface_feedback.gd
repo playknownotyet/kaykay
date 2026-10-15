@@ -55,6 +55,9 @@ func _ready() -> void:
 		bump.emit(0.006))
 	controller.grind_ended.connect(func(): Haptics.pulse(12, 0.25))
 	controller.wall_hit.connect(_on_wall_hit)
+	controller.stumbled.connect(func():
+		Haptics.pulse(45, 0.85)
+		bump.emit(0.012))
 	controller.mode_changed.connect(func(_on_foot: bool): Haptics.pulse(16, 0.35))
 
 

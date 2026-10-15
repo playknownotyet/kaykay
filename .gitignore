@@ -6,3 +6,6 @@
 export/
 tests/screens/
 *.blend1
+
+# Python önbelleği (Blender betikleri)
+__pycache__/

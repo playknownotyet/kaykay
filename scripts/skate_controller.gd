@@ -12,6 +12,7 @@ signal ollied
 signal ollie_started      # çökme (hazırlık) başladı; asıl sıçrama ollie_windup sonra
 signal double_jumped
 signal wall_hit(strength: float)   # duvara / bordüre çarpma (m/sn cinsinden şiddet)
+signal stumbled                     # sert çarpma: karakter sarsılır, ayağını yere koyup geri biner
 signal grind_started
 signal grind_ended
 signal mode_changed(on_foot: bool)
@@ -45,6 +46,11 @@ signal mode_changed(on_foot: bool)
 @export var air_steer_rate := 2.0
 ## Duvara sürterken kaybedilen hız oranı.
 @export var wall_speed_loss := 0.5
+## Sarsılma (ayak yere basıp geri biniş) eşikleri, km/s: canlıya ve sabit nesneye çarpma
+@export var stumble_creature_kmh := 15.0
+@export var stumble_wall_kmh := 25.0
+## Sarsılmada ayak yerdeyken kaykayın yavaşlaması (m/sn²)
+@export var stumble_brake := 6.0
 @export var floor_snap := 0.35
 ## Yerdeyken zemine bastırma hızı (m/sn); ileri hıza etkisi yok.
 @export var ground_stick := 1.0
@@ -90,6 +96,10 @@ var grind_time := 0.0
 var grind_dir := Vector3.FORWARD    # 3D gidiş yönü (eğimli raylarda eğik)
 var on_foot := false                # kaykaydan inmiş, yürüyor
 var floor_surface := "asfalt"       # üstünde olunan yüzey türü (level_builder "surface" bilgisi)
+var stumble_time := 0.0             # > 0: sarsılma sürüyor (animasyon "sarsil", 24 kare)
+const STUMBLE_TIME := 0.8
+## Sarsılma animasyonunda sol ayağın yerde olduğu aralık (sn, başlangıçtan): kaykay sürtünüp yavaşlar
+const STUMBLE_FOOT_DOWN := Vector2(0.2, 0.52)
 var board_anim: int = BoardAnim.NONE  # binme / inme sürüyor mu
 var board_anim_time := 0.0
 
@@ -153,6 +163,11 @@ func _physics_process(delta: float) -> void:
 	_coyote = maxf(_coyote - delta, 0.0)
 	_ollie_lock = maxf(_ollie_lock - delta, 0.0)
 	_last_rail_timer = maxf(_last_rail_timer - delta, 0.0)
+	if stumble_time > 0.0:
+		stumble_time = maxf(stumble_time - delta, 0.0)
+		var t := STUMBLE_TIME - stumble_time
+		if t > STUMBLE_FOOT_DOWN.x and t < STUMBLE_FOOT_DOWN.y and grounded:
+			speed = move_toward(speed, 0.0, stumble_brake * delta)
 
 	if inp.consume_board_toggle():
 		toggle_board()
@@ -361,7 +376,10 @@ func _handle_walls() -> void:
 			worst = nh
 	if worst_into <= 0.0:
 		return
-	wall_hit.emit(absf(speed) * worst_into)
+	var strength := absf(speed) * worst_into
+	wall_hit.emit(strength)
+	if strength >= stumble_wall_kmh / 3.6 and grounded:
+		shake()
 	if worst_into > 0.85:
 		# Kafa kafaya çarpma: hafif geri sekme
 		speed = -speed * 0.15
@@ -563,6 +581,26 @@ func _exit_grind(jump: bool) -> void:
 	_last_rail_timer = 1.0 if transfer else 0.25
 	_rail = null
 	grind_ended.emit()
+
+
+## Bir canlıya (yaya) çarpınca. Yavaşken yalnız biraz hız kaybı; stumble_creature_kmh
+## üstünde belirgin yavaşlar ve sarsılır (ayağını yere koyup kendiliğinden geri biner).
+func stumble(_away: Vector3) -> void:
+	if on_foot or board_anim != BoardAnim.NONE:
+		return
+	if absf(speed) < stumble_creature_kmh / 3.6:
+		speed *= 0.85
+		return
+	speed *= 0.55
+	shake()
+
+
+## Sarsılma animasyonunu başlat (yayaya / sabit nesneye sert çarpma).
+func shake() -> void:
+	if stumble_time > 0.0 or on_foot or grinding or board_anim != BoardAnim.NONE:
+		return
+	stumble_time = STUMBLE_TIME
+	stumbled.emit()
 
 
 ## Grind'i hemen bırakır (ışınlanma / yeniden doğma için).

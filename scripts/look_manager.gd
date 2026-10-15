@@ -189,6 +189,15 @@ func setup(p_env: Environment, p_sun: DirectionalLight3D, p_fx: Node, p_roots: A
 	roots = p_roots
 
 
+## Sonradan eklenen bir düğüme (ör. NPC kalabalığı) güncel görünümü uygula
+## ve görünüm değişince onu da güncelle.
+func add_root(node: Node) -> void:
+	if not roots.has(node):
+		roots.append(node)
+	_apply_materials(node, _merged(PRESETS[preset_index]))
+	_set_material_param(node, "vertex_snap", vertex_snap / maxf(pixel_size, 1.0))
+
+
 func preset_name() -> String:
 	return PRESETS[preset_index].name
 

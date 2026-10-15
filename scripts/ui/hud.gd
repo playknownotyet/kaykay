@@ -113,6 +113,8 @@ func _specs() -> Array:
 		[look, "posterize", 0.0, 64.0, 1.0, "Renk kademesi (0 = kapalı)"],
 		[look, "dither", 0.0, 2.0, 0.05, "Dither"],
 		[look, "vertex_snap", 0.0, 8.0, 0.5, "Poligon titremesi (0 = kapalı)"],
+		["NPC", null],
+		[player.get_parent().get_node("Crowd"), "count", 0.0, 40.0, 1.0, "NPC sayısı"],
 		["HIZ EFEKTİ", null],
 		[fx, "warp", -1.0, 1.0, 0.01, "Bükülme (+ dıştan içe, - balıkgözü)"],
 		[fx, "blur", 0.0, 0.2, 0.005, "Kenar bulanıklığı"],
@@ -300,7 +302,8 @@ func _toggle_panel() -> void:
 
 func _key(obj: Object, prop: String) -> String:
 	var owners := {SkateInput: "input", player: "player", camera: "camera", visual: "visual", fx: "fx", look: "look",
-		look.env: "env", Haptics.instance: "haptics", player.get_node("Feedback"): "feedback"}
+		look.env: "env", Haptics.instance: "haptics", player.get_node("Feedback"): "feedback",
+		player.get_parent().get_node("Crowd"): "npc"}
 	return "%s.%s" % [owners[obj], prop]
 
 

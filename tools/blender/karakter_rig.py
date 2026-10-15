@@ -147,6 +147,7 @@ CHEST_PARTS = {"Canta", "CantaCep", "CantaEtiket"}
 PART_BONES = {
     "Boyun": ["neck", "head", "chest"],
     "Tisort": ["spine", "chest", "neck", "upper_arm.L", "upper_arm.R"],
+    "TisortKol": ["chest", "upper_arm.L", "forearm.L", "upper_arm.R", "forearm.R"],
     "Kollar": ["chest", "upper_arm.L", "forearm.L", "hand.L", "upper_arm.R", "forearm.R", "hand.R"],
     "Eller": ["forearm.L", "hand.L", "forearm.R", "hand.R"],
     "Pantolon": ["hips", "thigh.L", "shin.L", "thigh.R", "shin.R"],
@@ -158,6 +159,32 @@ def seg_dist(p, a, b):
     ab = b - a
     t = max(0.0, min(1.0, (p - a).dot(ab) / max(ab.length_squared, 1e-9)))
     return (a + ab * t - p).length
+
+
+def _smooth(a, b, x):
+    k = max(0.0, min(1.0, (x - a) / (b - a)))
+    return k * k * (3 - 2 * k)
+
+
+# Kol olan parçalar (tamamı kol geometrisi): yalnız omuz ekleminde gövdeye karışır
+ARM_PARTS = {"Kollar", "TisortKol"}
+TORSO_BONES = {"hips", "spine", "chest", "neck", "head"}
+
+
+def arm_share(p, name):
+    """Noktanın kola ait payı (0 gövde ... 1 kol). Omuz ekleminden kol yönünde ilerledikçe
+    ve (gövde parçalarında) kol ekseninden uzaklaşmadıkça artar: omuz başı yumuşak döner,
+    koltuk altı ve trapez kolla birlikte çökmez."""
+    side = 1 if p.x > 0 else -1
+    s, e, w, h = arm(side)
+    d = Vector((ARM_DIR.x * side, 0, ARM_DIR.z))
+    q = p - s
+    t = q.dot(d)
+    if name in ARM_PARTS:
+        return _smooth(-0.05, 0.05, t)
+    radial = (q - d * t).length
+    r = 0.065
+    return _smooth(-0.02, 0.08, t) * (1.0 - _smooth(r, r * 1.45, radial))
 
 
 def assign_weights(obj, arm_obj):
@@ -189,15 +216,32 @@ def assign_weights(obj, arm_obj):
         if name == "Pantolon" and p.z > 0.68:
             add("hips", v.index, 1.0)
             continue
-        ws = []
-        for bname in PART_BONES[name]:
-            d = seg_dist(p, *segs[bname]) + 0.01
-            ws.append((1.0 / d ** 4, bname))
-        ws.sort(reverse=True)
-        ws = ws[:3]
-        total = sum(w for w, _ in ws)
-        for w, bname in ws:
-            add(bname, v.index, w / total)
+        def dist_w(cands):
+            ws = []
+            for bname in cands:
+                d = seg_dist(p, *segs[bname]) + 0.01
+                ws.append((1.0 / d ** 4, bname))
+            ws.sort(reverse=True)
+            ws = ws[:3]
+            total = sum(w for w, _ in ws)
+            return {b: w / total for w, b in ws}
+
+        cands = PART_BONES[name]
+        if name in ("Tisort", "TisortKol", "Kollar"):
+            # Omuz: gövde ve kol ağırlıkları omuz eklemine göre paylaştırılır
+            k = arm_share(p, name)
+            sfx = "L" if p.x > 0 else "R"
+            body = [b for b in cands if b in TORSO_BONES] or ["chest"]
+            limb = [b for b in ("upper_arm", "forearm", "hand") if f"{b}.{sfx}" in segs]
+            final = {b: w * (1 - k) for b, w in dist_w(body).items()}
+            if k > 0.001:
+                for b, w in dist_w([f"{b}.{sfx}" for b in limb]).items():
+                    final[b] = final.get(b, 0.0) + w * k
+        else:
+            final = dist_w(cands)
+        for bname, w in final.items():
+            if w > 0.002:
+                add(bname, v.index, w)
 
 
 def join_children(root_name, new_name):
@@ -699,6 +743,45 @@ def make_actions(arm_obj):
             pose["foot.R"] = lerp((-0.17, -0.06, 0.075), (-0.11, 0.01, 0.075), k)
             pose["hand.R"] = lerp((-0.13, 0.0, D + 0.07), (-0.27, 0.03, 0.66), k)
         pose["board"] = (0.0, 0.0, 0.0)
+        key_pose(arm_obj, f, pose)
+
+    # --- Sarsılma: yayaya / duvara çarpınca. Gövde ataletle öne savrulur, arka (sol) ayak
+    #     kaykaydan inip yana yere basar, gövde o ayağa yaslanıp dengeyi bulur, kollar
+    #     çırpınır; sonra ayak kendiliğinden kaykaya geri biner. Kaykay yerinde kalır
+    #     (oyunda bu sürede hızla yavaşlar, yere basan ayak kaymaz).
+    #     Godot'ta o an oynayan her şeyin üstüne tek seferlik biner (SARSIL_FRAMES / 30 sn). ---
+    act("sarsil")
+    LB = LEFT_ON_BOARD
+    ground = (0.24, 0.04, 0.075)                       # sol ayak: kaykayın solunda yerde
+    lift_out = (0.15, 0.1, D + 0.075 + 0.09)           # inerken / binerken havada
+    keys = [
+        # kare, çömelme, kalça (dx, dy), gövde (öne, burgu, yana), kafa, sol el, sağ el, kollar kalkık, sol ayak
+        (0, 0.05, (0.0, 0.02), (6, 0, 0), (0, 0, 0), (0.215, -0.02, 0.7), (-0.215, -0.02, 0.7), False, LB),
+        (2, 0.12, (0.0, -0.03), (28, 4, 6), (16, 0, 0), (0.3, -0.24, 0.84), (-0.28, -0.22, 0.8), True, LB),
+        (4, 0.1, (0.03, 0.0), (14, -4, -8), (4, -6, 6), (0.44, 0.0, 0.96), (-0.38, 0.06, 0.92), True, lift_out),
+        (7, 0.16, (0.07, 0.03), (8, -8, -12), (-8, -6, 8), (0.46, 0.08, 0.9), (-0.4, 0.1, 0.98), True, ground),
+        (10, 0.17, (0.08, 0.03), (12, -4, -9), (-2, 4, 4), (0.4, -0.04, 0.86), (-0.36, -0.06, 0.88), True, ground),
+        (13, 0.14, (0.06, 0.03), (8, -2, -6), (0, 0, 2), (0.32, -0.04, 0.78), (-0.3, -0.04, 0.78), False, ground),
+        (16, 0.09, (0.03, 0.02), (10, 0, -3), (0, 0, 0), (0.28, -0.03, 0.76), (-0.27, -0.03, 0.75), False, lift_out),
+        (19, 0.08, (0.0, 0.02), (8, 0, 0), (0, 0, 0), (0.24, -0.02, 0.72), (-0.23, -0.02, 0.72), False, LB),
+        (24, 0.05, (0.0, 0.02), (6, 0, 0), (0, 0, 0), (0.215, -0.02, 0.7), (-0.215, -0.02, 0.7), False, LB),
+    ]
+    for f, crouch, (hx, hy), spine, head, hl, hr, raised, foot_l in keys:
+        pose = ride_base(crouch=crouch, hips=(hx, hy, D - crouch), spine_rot=spine, head_rot=head,
+                         chest_rot=(spine[0] * 0.3, spine[1] * 0.5, spine[2] * 0.4))
+        pose["hand.L"] = (hl[0], hl[1], hl[2] + D - crouch)
+        pose["hand.R"] = (hr[0], hr[1], hr[2] + D - crouch)
+        pose["foot.L"] = foot_l
+        if foot_l is ground:
+            pose["knee.L"] = (0.3, -0.55, 0.45)        # diz dışa-öne: yana basış
+            pose["foot_rot.L"] = (0, 0, 12)
+        elif foot_l is lift_out:
+            pose["knee.L"] = (0.25, -0.6, 0.5)
+            pose["foot_rot.L"] = (-10, 0, 8)
+        if raised:
+            pose.update(RAISED_ELBOWS)
+            pose["hand_rot.L"] = (-20, 0, 35)
+            pose["hand_rot.R"] = (-20, 0, -35)
         key_pose(arm_obj, f, pose)
 
     return acts

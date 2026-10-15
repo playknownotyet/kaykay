@@ -371,32 +371,42 @@ def build_hair(bm):
 
 
 def build_shirt(bm):
+    """Tişört gövdesi. Omuz hattı gövdenin parçası: koltuk altında kol kökü gövdenin
+    içinden çıkar, omuz başı yuvarlak (deltoid), trapez boyna eğimle iner."""
     up = Vector((0, 0, 1))
     loft(bm, [
         # (merkez, eksen, yarı genişlik, yarı derinlik): önden arkaya yassı gövde
         (Vector((0, 0.006, 0.695)), up, 0.172, 0.112),   # etek: hafif bol
         (Vector((0, 0.004, 0.80)), up, 0.162, 0.104),    # bel
         (Vector((0, -0.004, 0.93)), up, 0.168, 0.106),   # göğüs (önde hafif dolgun)
-        (Vector((0, 0.0, 1.03)), up, 0.178, 0.1),        # göğüs üstü
-        (Vector((0, 0.004, 1.085)), up, 0.168, 0.088),   # omuz hattı
-        (Vector((0, 0.006, 1.12)), up, 0.11, 0.072),     # eğimli omuz üstü
+        (Vector((0, 0.0, 1.0)), up, 0.18, 0.102),        # koltuk altı
+        (Vector((0, 0.002, 1.05)), up, 0.198, 0.094),    # omuz başı (deltoid hattı)
+        (Vector((0, 0.005, 1.095)), up, 0.168, 0.082),   # trapez
+        (Vector((0, 0.006, 1.125)), up, 0.11, 0.068),    # eğimli omuz üstü
         (Vector((0, 0.008, 1.14)), up, 0.062, 0.056),    # yaka
-    ], 14, cap_start=False, cap_end=False, jitter=0.015, phase=math.pi / 14)
-    # Bol, dirseğe doğru inen kısa kollar (omuzdan düşük dikiş)
+    ], 14, cap_start=False, cap_end=False, jitter=0.012, phase=math.pi / 14)
+
+
+def build_sleeves(bm):
+    """Bol kısa kollar: baş kısmı kapalı ve yuvarlak, gövdenin içinden doğar
+    (omuzda basamak / boşluk kalmaz)."""
     for side in (-1, 1):
         shoulder, elbow, _, _, d = arm_points(side)
-        start = shoulder - d * 0.035
         loft(bm, [
-            (start, d, 0.066, 0.06),
+            (shoulder - d * 0.05, d, 0.03, 0.028),
+            (shoulder - d * 0.022, d, 0.056, 0.052),
+            (shoulder + d * 0.02, d, 0.066, 0.061),
             (shoulder + d * 0.09, d, 0.07, 0.064),
             (shoulder + d * 0.19, d, 0.072, 0.066),
-        ], 8, cap_start=False, cap_end=False, jitter=0.02)
+        ], 10, cap_start=True, cap_end=False, jitter=0.015)
 
 
 def build_arms(bm):
     for side in (-1, 1):
         shoulder, elbow, wrist, hand_end, d = arm_points(side)
         loft(bm, [
+            (shoulder - d * 0.045, d, 0.022, 0.021),   # gövde içinde kapalı yuvarlak baş
+            (shoulder - d * 0.015, d, 0.044, 0.042),
             (shoulder + d * 0.04, d, 0.05, 0.048),     # omuz / kol üstü
             (shoulder + d * 0.15, d, 0.047, 0.046),    # pazı
             (elbow, d, 0.038, 0.037),                   # dirsek
@@ -595,6 +605,7 @@ def main():
     make_object("Agiz", lambda bm: build_mouth(bm, tree), "agiz", root)
     make_object("Sac", build_hair, "sac", root)
     make_object("Tisort", build_shirt, "tisort", root)
+    make_object("TisortKol", build_sleeves, "tisort", root)
     make_object("Kollar", build_arms, "ten", root)
     make_object("Eller", build_hands, "ten", root)
     make_object("Pantolon", build_pants, "kot", root)

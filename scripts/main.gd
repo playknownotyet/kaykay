@@ -76,6 +76,14 @@ func _ready() -> void:
 	add_child(look)
 	look.apply()
 
+	# Hayvan NPC kalabalığı (yürüme ağı açılışta haritadan çıkarılır)
+	var crowd := NpcCrowd.new()
+	crowd.name = "Crowd"
+	crowd.player = player
+	crowd.camera = camera
+	crowd.look = look
+	world.add_child(crowd)
+
 	var ui := CanvasLayer.new()
 	ui.layer = 2
 	add_child(ui)
