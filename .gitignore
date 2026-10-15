@@ -1,0 +1,7 @@
+.godot/
+/android/
+*.exe
+*.apk
+*.aab
+export/
+tests/screens/

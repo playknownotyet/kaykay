@@ -1,0 +1,4 @@
+# Godot metin dosyalarinda satir sonlarini LF tut
+* text=auto eol=lf
+*.png binary
+*.glb binary
