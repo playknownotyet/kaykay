@@ -1,0 +1,222 @@
+# Godot projesini Mac'e ihtiyaç duymadan iOS için derler, imzalar ve TestFlight'a yükler.
+# Sadece elle çalışır (Actions sekmesi > "iOS TestFlight" > "Run workflow").
+# Not: Özel (private) depoda macOS dakikaları 10 kat sayılır; bir çalıştırma ~10-15 dakika sürer.
+# Gerekli secret'lar ve kurulumu: docs/IOS_KURULUM.md
+
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "TestFlight'a yüklensin mi? (kapalıysa sadece derleyip .ipa'yı saklar)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    name: iOS derle ve yükle
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      GODOT_TAG: "4.7.2-stable"
+      BUNDLE_ID: com.playknownotyet.kaykay
+      SCHEME: kaykay
+      BUILD_NUMBER: ${{ github.run_number }}
+      IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+      IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+      IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+
+    steps:
+      - name: Secret'ları kontrol et
+        run: |
+          missing=""
+          for name in IOS_TEAM_ID IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_PROVISIONING_PROFILE_BASE64; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ "${{ inputs.upload }}" = "true" ]; then
+            for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
+              [ -n "${!name}" ] || missing="$missing $name"
+            done
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::Eksik GitHub secret'ları:$missing  (bkz. docs/IOS_KURULUM.md)"
+            exit 1
+          fi
+          echo "Tüm secret'lar mevcut."
+
+      - uses: actions/checkout@v4
+
+      - name: Godot önbelleği
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/godot-cache
+          key: godot-${{ env.GODOT_TAG }}-macos-ios
+
+      - name: Godot ve iOS şablonunu indir
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot-cache
+          cd ~/godot-cache
+          base="https://github.com/godotengine/godot/releases/download/$GODOT_TAG"
+          curl -fsSL -o godot.zip "$base/Godot_v${GODOT_TAG}_macos.universal.zip"
+          unzip -q godot.zip && rm godot.zip
+          curl -fsSL -o templates.tpz "$base/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q -j templates.tpz templates/ios.zip templates/version.txt && rm templates.tpz
+          ls -la
+
+      - name: Godot'u kur
+        run: |
+          version="$(tr -d '[:space:]' < ~/godot-cache/version.txt)"
+          tdir="$HOME/Library/Application Support/Godot/export_templates/$version"
+          mkdir -p "$tdir"
+          cp ~/godot-cache/ios.zip ~/godot-cache/version.txt "$tdir/"
+          echo "GODOT=$HOME/godot-cache/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+
+      - name: Xcode sürümünü seç
+        run: |
+          xcode="$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|release_candidate|_rc' | sort -V | tail -1)"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      - name: Godot ile Xcode projesini dışa aktar
+        run: |
+          sed -i '' "s|^application/app_store_team_id=.*|application/app_store_team_id=\"$IOS_TEAM_ID\"|" export_presets.cfg
+          sed -i '' "s|^application/version=.*|application/version=\"$BUILD_NUMBER\"|" export_presets.cfg
+          "$GODOT" --headless --path . --import || true
+          mkdir -p export/ios
+          "$GODOT" --headless --path . --export-release "iOS" export/ios/kaykay.ipa
+          test -d export/ios/kaykay.xcodeproj || { echo "::error::Godot Xcode projesini oluşturamadı"; exit 1; }
+          xcodebuild -list -project export/ios/kaykay.xcodeproj
+
+      - name: İmzalama sertifikası ve profilini kur
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/kaykay.keychain-db"
+          KC_PASS="$(openssl rand -hex 16)"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+
+          printf '%s' "$IOS_DIST_CERT_P12_BASE64" | tr -d ' \r\n' | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          if ! security import "$RUNNER_TEMP/cert.p12" -P "$IOS_DIST_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"; then
+            echo "::error::Sertifika (.p12) içe aktarılamadı. IOS_DIST_CERT_PASSWORD veya IOS_DIST_CERT_P12_BASE64 yanlış olabilir."
+            exit 1
+          fi
+          curl -fsSL -o "$RUNNER_TEMP/wwdr.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          security import "$RUNNER_TEMP/wwdr.cer" -k "$KEYCHAIN" || true
+          security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          SIGN_SHA1="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -E 'Apple Distribution|iPhone Distribution' | head -1 | awk '{print $2}')"
+          if [ -z "$SIGN_SHA1" ]; then
+            security find-identity -v -p codesigning "$KEYCHAIN"
+            echo "::error::Keychain'de 'Apple Distribution' imza kimliği bulunamadı. Sertifika dağıtım (Distribution) türünde olmalı."
+            exit 1
+          fi
+
+          PROFILE="$RUNNER_TEMP/profile.mobileprovision"
+          printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | tr -d ' \r\n' | base64 --decode > "$PROFILE"
+          security cms -D -i "$PROFILE" > "$RUNNER_TEMP/profile.plist"
+          PB=/usr/libexec/PlistBuddy
+          PROFILE_UUID="$($PB -c 'Print UUID' "$RUNNER_TEMP/profile.plist")"
+          PROFILE_NAME="$($PB -c 'Print Name' "$RUNNER_TEMP/profile.plist")"
+          PROFILE_APPID="$($PB -c 'Print Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")"
+          echo "Profil: $PROFILE_NAME ($PROFILE_UUID) -> $PROFILE_APPID"
+          if [ "$PROFILE_APPID" != "$IOS_TEAM_ID.$BUNDLE_ID" ]; then
+            echo "::error::Profil '$PROFILE_APPID' için yapılmış, beklenen '$IOS_TEAM_ID.$BUNDLE_ID'. IOS_TEAM_ID veya profilin App ID'si yanlış."
+            exit 1
+          fi
+          if $PB -c 'Print ProvisionedDevices' "$RUNNER_TEMP/profile.plist" > /dev/null 2>&1; then
+            echo "::error::Bu profil cihaz listesi içeriyor (Development/Ad Hoc). 'App Store Connect' türünde dağıtım profili gerekli."
+            exit 1
+          fi
+          for d in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$d"
+            cp "$PROFILE" "$d/$PROFILE_UUID.mobileprovision"
+          done
+
+          {
+            echo "KEYCHAIN=$KEYCHAIN"
+            echo "SIGN_SHA1=$SIGN_SHA1"
+            echo "PROFILE_UUID=$PROFILE_UUID"
+            echo "PROFILE_NAME=$PROFILE_NAME"
+          } >> "$GITHUB_ENV"
+
+      - name: Arşivle (xcodebuild archive)
+        run: |
+          xcodebuild -quiet -project export/ios/kaykay.xcodeproj -scheme "$SCHEME" \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/kaykay.xcarchive" \
+            archive \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            CODE_SIGN_IDENTITY="$SIGN_SHA1" \
+            PROVISIONING_PROFILE="$PROFILE_UUID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN"
+
+      - name: .ipa oluştur (xcodebuild -exportArchive)
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>$IOS_TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>$SIGN_SHA1</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$BUNDLE_ID</key><string>$PROFILE_UUID</string>
+            </dict>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/kaykay.xcarchive" \
+            -exportPath "$RUNNER_TEMP/ipa" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+          IPA="$(ls "$RUNNER_TEMP"/ipa/*.ipa | head -1)"
+          ls -la "$IPA"
+          echo "IPA=$IPA" >> "$GITHUB_ENV"
+
+      - name: .ipa dosyasını sakla
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaykay-ios-${{ github.run_number }}
+          path: ${{ env.IPA }}
+          retention-days: 7
+
+      - name: TestFlight'a yükle
+        if: inputs.upload
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          KEY_FILE=~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          if printf '%s' "$ASC_KEY_P8" | grep -q 'BEGIN PRIVATE KEY'; then
+            printf '%s\n' "$ASC_KEY_P8" > "$KEY_FILE"
+          else
+            printf '%s' "$ASC_KEY_P8" | tr -d ' \r\n' | base64 --decode > "$KEY_FILE"
+          fi
+          xcrun altool --upload-app --type ios --file "$IPA" \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          echo "### Yüklendi: sürüm 0.1 ($BUILD_NUMBER)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Apple işlemesi 5-30 dk sürer; sonra iPhone'daki TestFlight uygulamasında görünür." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Temizlik
+        if: always()
+        run: |
+          [ -n "$KEYCHAIN" ] && security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/profile.mobileprovision" ~/.appstoreconnect/private_keys/*.p8
