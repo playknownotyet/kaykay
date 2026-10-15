@@ -118,6 +118,8 @@ func _on_drag(index: int, pos: Vector2) -> void:
 
 
 func _left_drag(t: Dictionary, finger_hps: float) -> void:
+	if SkateInput.on_foot:
+		return  # yürürken ayak hareketi yok
 	var size := get_viewport_rect().size
 	var dy: float = (t.pos.y - t.start.y) / size.y
 	if t.mode == SkateInput.Gesture.NONE:
@@ -210,8 +212,8 @@ func _draw() -> void:
 	var faint := Color(1, 1, 1, 0.35)
 	var strong := Color(1, 1, 1, 0.8)
 
-	draw_string(font, Vector2(size.x * 0.04, size.y * 0.93),
-		"aşağı: İT  ·  iterken yana: DÖN  ·  yukarı: FREN / GERİ", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, faint)
+	var hint := "joystick: YÜRÜ" if SkateInput.on_foot else "aşağı: İT  ·  iterken yana: DÖN  ·  yukarı: FREN / GERİ"
+	draw_string(font, Vector2(size.x * 0.04, size.y * 0.93), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, faint)
 
 	# Ayak hareketi göstergesi
 	if _gesture_owner != -1 and _touches.has(_gesture_owner):

@@ -14,6 +14,10 @@ uniform float line_width = 0.035;
 uniform float line_strength = 1.0;
 uniform float noise_strength = 0.0;
 uniform float noise_scale = 1.5;
+// Zeminde delikler: üstünde başka bir yüzey (arnavut kaldırımı) olan alanlar hiç
+// çizilmez; aksi halde iki yüzey üst üste titreşir. (xmin, zmin, xmax, zmax)
+uniform vec4 holes[8];
+uniform int hole_count = 0;
 
 #include "res://shaders/common.gdshaderinc"
 
@@ -42,6 +46,12 @@ void vertex() {
 }
 
 void fragment() {
+	for (int i = 0; i < hole_count; i++) {
+		vec4 h = holes[i];
+		if (world_pos.x > h.x && world_pos.x < h.z && world_pos.z > h.y && world_pos.z < h.w) {
+			discard;
+		}
+	}
 	vec3 n = abs(world_normal);
 	vec2 uv;
 	if (n.y >= n.x && n.y >= n.z) {

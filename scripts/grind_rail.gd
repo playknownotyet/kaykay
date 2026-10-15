@@ -8,9 +8,12 @@ var a := Vector3.ZERO
 var b := Vector3.ZERO
 var length := 0.0
 var direction := Vector3.FORWARD
+## "metal" (korkuluk, rampa ağzı) ya da "beton" (kenar, kaldırım): grind hissi buna göre
+var surface := "metal"
 
 
-func setup(p_a: Vector3, p_b: Vector3) -> GrindRail:
+func setup(p_a: Vector3, p_b: Vector3, p_surface := "metal") -> GrindRail:
+	surface = p_surface
 	a = p_a
 	b = p_b
 	length = a.distance_to(b)

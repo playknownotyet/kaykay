@@ -15,6 +15,7 @@ var fx: Node
 var look: Node
 var touch_controls: Control
 var _look_button: Button
+var _board_button: Button
 
 var _speed_label: Label
 var _panel: PanelContainer
@@ -37,7 +38,9 @@ func setup(p_player: SkateController, p_camera: Node, p_visual: Node, p_fx: Node
 	_capture_defaults()
 	_load()
 	_sync_widgets()
-	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button])
+	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _board_button])
+	player.mode_changed.connect(_update_board_button)
+	_update_board_button(player.on_foot)
 	look.changed.connect(func(n: String):
 		_look_button.text = "Görünüm: %s" % n
 		_sync_widgets())
@@ -96,7 +99,11 @@ func _specs() -> Array:
 		[camera, "fov_fast", 50.0, 110.0, 1.0, "Görüş açısı (hızlı)"],
 		[camera, "fast_speed", 4.0, 16.0, 0.5, "Etkilerin tam güç hızı (m/sn)"],
 		[camera, "follow_sharpness", 2.0, 20.0, 0.5, "Takip sıkılığı"],
-		[camera, "vibration", 0.0, 0.05, 0.001, "Yol titreşimi"],
+		["TİTREŞİM (telefon)", null],
+		[Haptics.instance, "strength", 0.0, 2.0, 0.05, "Titreşim gücü"],
+		[Haptics.instance, "min_pulse_ms", 4.0, 40.0, 1.0, "En kısa darbe (ms) — zayıf motorlarda artır"],
+		[Haptics.instance, "max_rate_hz", 8.0, 40.0, 1.0, "Saniyedeki en fazla darbe"],
+		[player.get_node("Feedback"), "camera_strength", 0.0, 3.0, 0.05, "Kamera zemin titremesi"],
 		["GÖRÜNÜM (ön ayarı değiştirince sıfırlanır)", null],
 		[look.env, "adjustment_contrast", 0.5, 2.0, 0.01, "Kontrast"],
 		[look.env, "adjustment_brightness", 0.5, 1.5, 0.01, "Parlaklık"],
@@ -115,11 +122,22 @@ func _specs() -> Array:
 	]
 
 
-func _process(_delta: float) -> void:
+var _fps_log_timer := 0.0
+
+
+func _process(delta: float) -> void:
 	if not player:
 		return
+	# Telefonda test: FPS'i log'a yaz (bilgisayardan adb logcat ile okunur)
+	if OS.is_debug_build() and OS.has_feature("mobile"):
+		_fps_log_timer += delta
+		if _fps_log_timer > 2.0:
+			_fps_log_timer = 0.0
+			print("KAYKAY_FPS %d  hiz=%.1f  dunya=%s" % [Engine.get_frames_per_second(), player.speed, player.get_viewport().size])
 	var kmh := absf(player.speed) * 3.6
 	var state := "yerde" if player.grounded else "havada"
+	if player.on_foot:
+		state = "yürüyor"
 	if player.grinding:
 		state = "%s %.1f sn" % ["50-50" if player.grind_style == 0 else "BOARDSLIDE", player.grind_time]
 	_speed_label.text = "%d km/s  ·  %s  ·  %d FPS" % [roundi(kmh), state, Engine.get_frames_per_second()]
@@ -167,6 +185,16 @@ func _build() -> void:
 	_look_button.pressed.connect(func(): look.next(); _save())
 	top.add_child(_look_button)
 
+	# Kaykaydan in / bin (sağ üst köşe, joystick'ten uzakta)
+	_board_button = Button.new()
+	_board_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	_board_button.offset_left = -get_viewport_rect().size.x * 0.2
+	_board_button.offset_right = -12
+	_board_button.offset_top = 12
+	_board_button.offset_bottom = 12 + vh * 0.1
+	_board_button.pressed.connect(func(): SkateInput.request_board_toggle())
+	add_child(_board_button)
+
 	_panel = PanelContainer.new()
 	_panel.visible = false
 	_panel.position = Vector2(12, 12 + vh * 0.1)
@@ -206,6 +234,7 @@ func _build() -> void:
 	_add_check(gyro_row, SkateInput, "gyro_invert", "Ters")
 	_add_check(gyro_row, SkateInput, "gyro_use_y", "Y ekseni")
 	_add_check(gyro_row, fx, "enabled", "Hız efekti")
+	_add_check(gyro_row, Haptics.instance, "enabled", "Titreşim")
 
 	var action_row := HBoxContainer.new()
 	box.add_child(action_row)
@@ -257,6 +286,10 @@ func _update_label(entry: Dictionary) -> void:
 	entry.label.text = "%s: %s" % [entry.name, str(snappedf(entry.obj.get(entry.prop), 0.001))]
 
 
+func _update_board_button(on_foot: bool) -> void:
+	_board_button.text = "Kaykaya bin (E)" if on_foot else "Kaykaydan in (E)"
+
+
 func _toggle_panel() -> void:
 	_panel.visible = not _panel.visible
 	if not _panel.visible:
@@ -266,7 +299,8 @@ func _toggle_panel() -> void:
 # ---------- Değer yönetimi ----------
 
 func _key(obj: Object, prop: String) -> String:
-	var owners := {SkateInput: "input", player: "player", camera: "camera", visual: "visual", fx: "fx", look: "look", look.env: "env"}
+	var owners := {SkateInput: "input", player: "player", camera: "camera", visual: "visual", fx: "fx", look: "look",
+		look.env: "env", Haptics.instance: "haptics", player.get_node("Feedback"): "feedback"}
 	return "%s.%s" % [owners[obj], prop]
 
 

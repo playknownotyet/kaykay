@@ -1,59 +1,114 @@
 extends Node3D
-## Geçici (placeholder) karakter + kaykay görseli.
-## Gerçek model gelene kadar basit şekillerle: önemli olan itme ayağının
-## parmağa senkron hareket etmesi, dönüşte eğilme ve inişte esneme.
+## Oyuncu görseli: Blender'da üretilen karakter + kaykay modeli (assets/karakter/karakter.glb).
 ##
-## Yerel eksenler: kaykayın ucu -Z yönünde. Karakter önüne (-Z) bakar, kamera
-## sırtını ve sırt çantasını görür. Sağ ayak kaykayın üstünde kalır, sol ayak
-## kaykayın solunda yere basıp geriye doğru iter.
+## - Görsel, kaykayın yönüne ve zemin eğimine hizalanır; dönüşte eğilir.
+## - Animasyonlar bir AnimationTree ile yumuşak geçişlerle oynatılır.
+##   Sürüşte yavaş/hızlı ve sola/sağa dönüş pozları hıza ve direksiyona göre
+##   sürekli karışır: kollar ve gövde sürüşe canlı tepki verir.
+## - Kaykay iskeletin bir kemiği: binme/inme/elde taşıma animasyonun parçası.
+## - İtme animasyonu kendi kendine oynamaz: her karede parmağın konumuna göre
+##   sarılır, böylece sol ayak parmağı izler (geri itmede tersine).
+## - Grind'de kıvılcım çıkar; boardslide'da tüm görsel 90° döner.
+##
+## Model kaynağı: tools/blender/karakter_model.py + karakter_rig.py
 
+const MODEL := preload("res://assets/karakter/karakter.glb")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
+const STATES := ["ride", "push", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount"]
+const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "brake", "air", "grind", "walk", "run", "stand_idle"]
+## Ollie animasyonunda fiziksel sıçramanın olduğu an (karakter_rig.py OLLIE_POP_FRAME / 30)
+const OLLIE_POP_TIME := 0.1
 
-@export var lean_angle := 18.0          # dönüşte en fazla eğilme (derece)
+@export var lean_angle := 17.0          # dönüşte en fazla eğilme (derece)
 @export var align_sharpness := 14.0
+@export var anim_blend := 0.15
+## Yürüme / koşu animasyonu 1x hızda kaç m/sn'ye denk geliyor (ayak kaymasın diye).
+## karakter_rig.py'deki WALK / RUN ölçülerinden: 2 * amp / (duty * döngü süresi)
+@export var walk_anim_speed := 1.273
+@export var run_anim_speed := 3.667
 
-const DECK_Y := 0.12
-# "FRONT" = kaykayda kalan sağ ayak, "BACK" = iten sol ayak
-const FRONT_FOOT := Vector3(0.05, DECK_Y + 0.03, -0.1)
-const BACK_FOOT_ON_BOARD := Vector3(-0.05, DECK_Y + 0.03, 0.2)
-const STROKE_START := Vector3(-0.27, 0.04, -0.15)
-const STROKE_END := Vector3(-0.27, 0.04, 0.7)
-const BRAKE_FOOT := Vector3(-0.24, 0.04, 0.45)
-const HIP_IDLE := Vector3(0.0, 0.62, 0.04)
-const HIP_PUSH := Vector3(0.05, 0.5, -0.04)
-const HIP_BRAKE := Vector3(0.03, 0.52, 0.02)
-const HIP_GRIND := Vector3(0.0, 0.5, 0.02)
-const PUSH_TILT := -0.3      # itme sırasında gövdenin öne eğilmesi (radyan)
+@export_group("Kol sallanması")
+## Yay sertliği ve sönüm: kollar ne kadar çabuk toparlanır / ne kadar salınır
+@export var sway_stiffness := 38.0
+@export var sway_damping := 7.0
+## Hızla rüzgârda geriye itilme (radyan / m/sn)
+@export var sway_wind := 0.016
+## İvmede geride kalma, frende öne savrulma (radyan / m/sn²)
+@export var sway_inertia := 0.045
+## Dönüşte merkezkaç ile dışa açılma (radyan / m/sn²)
+@export var sway_turn := 0.035
+## Adımlarla gelen hafif sallanma
+@export var sway_step := 0.06
+@export var sway_max := 0.55
+## Bu hızda (m/sn) "hızlı sürüş" pozu tam devrede.
+@export var fast_ride_speed := 8.0
 
 var controller: SkateController
 
-var _board: Node3D
-var _rider: Node3D          # kalça / gövde / kafa
-var _back_foot: MeshInstance3D
-var _front_foot: MeshInstance3D
-var _back_leg: MeshInstance3D
-var _front_leg: MeshInstance3D
-
-var _foot_pos := BACK_FOOT_ON_BOARD
-var _hip_pos := HIP_IDLE
-var _squash := 0.0
-var _lean := 0.0
-var _tilt := 0.0
+var _model: Node3D
+var _anim: AnimationPlayer
+var _tree: AnimationTree
+var _push_len := 0.8
+var _state := ""
+var _land_timer := 0.0
 var _sparks: CPUParticles3D
 var _time := 0.0
+var _lean := 0.0
+var _speed_blend := 0.0
+var _special := ""           # "ollie" / "flip": tek seferlik zıplama animasyonu
+var _special_t := 0.0
+var _special_len := 0.0
+var _sway: ArmSway
+# Kol yayı: x = arkaya, y = dışa; L ve R ayrı (dönüşte farklı tepki verir)
+var _sway_pos := {"L": Vector2.ZERO, "R": Vector2.ZERO}
+var _sway_vel := {"L": Vector2.ZERO, "R": Vector2.ZERO}
+var _prev_speed := 0.0
+var _prev_yaw := 0.0
+var _step_phase := 0.0
+var _air_t := 0.0            # kesintisiz havada geçen süre
+var _ollie_t := 0.0          # son ollie'den beri (ollie'de hava pozu hemen gelir)
+var _turn_blend := 0.0
 
 
 func _ready() -> void:
 	controller = get_parent() as SkateController
-	controller.landed.connect(_on_landed)
-	controller.ollied.connect(func(): _squash = -0.25)
-	_build()
+	# İniş çömelmesi yalnızca gerçek bir uçuştan sonra (tümsek/kenar titremesinde değil)
+	controller.landed.connect(func(impact: float):
+		if _air_t > 0.25 or impact > 2.0:
+			_land_timer = 0.18)
+	controller.ollied.connect(_on_ollied)
+	controller.ollie_started.connect(func(): _start_special("ollie", 0.0))
+	controller.double_jumped.connect(func():
+		_start_special("flip", 0.0)
+		_kick_arms(Vector2(0.2, 1.2)))
+	_model = MODEL.instantiate()
+	# Blender'da karakter -Y'ye bakıyor; glTF'te bu +Z olur. Oyunda ileri -Z.
+	_model.rotation_degrees.y = 180.0
+	add_child(_model)
+	_convert_materials(_model)
+	_setup_animation()
+	_build_sparks()
+	var skel: Skeleton3D = _model.find_child("Skeleton3D", true, false)
+	_sway = ArmSway.new()
+	skel.add_child(_sway)
+	_prev_yaw = atan2(controller.heading.x, controller.heading.z)
+	controller.ollied.connect(func(): _kick_arms(Vector2(0.0, 1.6)))
+	controller.landed.connect(func(impact: float): _kick_arms(Vector2(-0.4, -0.5) * clampf(impact / 4.0, 0.0, 1.5)))
 
 
 func _physics_process(delta: float) -> void:
 	_time += delta
+	_land_timer = maxf(_land_timer - delta, 0.0)
+	if _special != "":
+		_special_t += delta
+		var landed_now := controller.grounded and not controller.is_winding_up() and _special_t > OLLIE_POP_TIME + 0.1
+		if _special_t >= _special_len or controller.grinding or landed_now or controller.on_foot:
+			_special = ""
+	_ollie_t += delta
+	_air_t = 0.0 if (controller.grounded or controller.grinding) else _air_t + delta
 	_align(delta)
-	_animate_body(delta)
+	_update_animation()
+	_update_arm_sway(delta)
 	_update_sparks()
 
 
@@ -72,6 +127,8 @@ func _align(delta: float) -> void:
 			target = target * Basis(Vector3.UP, PI * 0.5)
 		# Rayda denge: hafif sağa sola salınım
 		lean_target = sin(_time * 5.0) * 0.07 + sin(_time * 8.3) * 0.03
+	elif controller.on_foot or controller.board_anim != SkateController.BoardAnim.NONE:
+		lean_target = 0.0
 	else:
 		# Dönüşe doğru eğil (hızla artar)
 		var speed01 := clampf(absf(controller.speed) / 6.0, 0.0, 1.0)
@@ -83,133 +140,229 @@ func _align(delta: float) -> void:
 	global_basis = current.slerp(target, 1.0 - exp(-align_sharpness * delta))
 
 
-func _animate_body(delta: float) -> void:
+# ---------- Animasyon ----------
+
+func _setup_animation() -> void:
+	_anim = _model.find_child("AnimationPlayer", true, false)
+	for n in LOOPING:
+		if _anim.has_animation(n):
+			_anim.get_animation(n).loop_mode = Animation.LOOP_LINEAR
+	_push_len = _anim.get_animation("push").length
+
+	var bt := AnimationNodeBlendTree.new()
+	var tr := AnimationNodeTransition.new()
+	tr.xfade_time = anim_blend
+	for st in STATES:
+		tr.add_input(st)
+	bt.add_node("state", tr)
+
+	var anim := func(name: String) -> AnimationNodeAnimation:
+		var a := AnimationNodeAnimation.new()
+		a.animation = name
+		return a
+
+	# Sürüş: hız (yavaş <-> hızlı) ve direksiyon (sol <- orta -> sağ) karışımı
+	bt.add_node("a_ride_idle", anim.call("ride_idle"))
+	bt.add_node("a_ride_fast", anim.call("ride_fast"))
+	bt.add_node("a_turn_l", anim.call("ride_turn_l"))
+	bt.add_node("a_turn_r", anim.call("ride_turn_r"))
+	bt.add_node("ride_speed", AnimationNodeBlend2.new())
+	bt.connect_node("ride_speed", 0, "a_ride_idle")
+	bt.connect_node("ride_speed", 1, "a_ride_fast")
+	bt.add_node("ride_turn", AnimationNodeBlend3.new())
+	bt.connect_node("ride_turn", 0, "a_turn_l")
+	bt.connect_node("ride_turn", 1, "ride_speed")
+	bt.connect_node("ride_turn", 2, "a_turn_r")
+	bt.connect_node("state", STATES.find("ride"), "ride_turn")
+
+	# İtme: hız 0, konum her karede parmaktan gelir
+	bt.add_node("push_anim", anim.call("push"))
+	bt.add_node("push_scale", AnimationNodeTimeScale.new())
+	bt.add_node("push_seek", AnimationNodeTimeSeek.new())
+	bt.connect_node("push_scale", 0, "push_anim")
+	bt.connect_node("push_seek", 0, "push_scale")
+	bt.connect_node("state", STATES.find("push"), "push_seek")
+
+	# Yürüme / koşu: hız gerçek harekete göre ölçeklenir
+	for st in ["walk", "run"]:
+		bt.add_node(st + "_anim", anim.call(st))
+		bt.add_node(st + "_scale", AnimationNodeTimeScale.new())
+		bt.connect_node(st + "_scale", 0, st + "_anim")
+		bt.connect_node("state", STATES.find(st), st + "_scale")
+
+	# Zıplamalar: bir noktadan başlatılabilir (rampadan / raydan çıkışta "pat" anından)
+	for st in ["ollie", "flip"]:
+		bt.add_node(st + "_anim", anim.call(st))
+		bt.add_node(st + "_seek", AnimationNodeTimeSeek.new())
+		bt.connect_node(st + "_seek", 0, st + "_anim")
+		bt.connect_node("state", STATES.find(st), st + "_seek")
+
+	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount"]:
+		bt.add_node(st, anim.call(st))
+		bt.connect_node("state", STATES.find(st), st)
+	bt.connect_node("output", 0, "state")
+
+	_tree = AnimationTree.new()
+	_tree.tree_root = bt
+	_model.add_child(_tree)
+	_tree.anim_player = _tree.get_path_to(_anim)
+	_tree.set("parameters/push_scale/scale", 0.0)
+	_tree.active = true
+	_set_state("ride")
+
+
+func _set_state(st: String) -> void:
+	if st == _state:
+		return
+	_state = st
+	_tree.set("parameters/state/transition_request", st)
+
+
+func _update_animation() -> void:
 	var inp := SkateInput
-	var foot_target := BACK_FOOT_ON_BOARD
-	var hip_target := HIP_IDLE
-	var foot_sharp := 12.0
-	var tilt_target := 0.0
+	var dt := get_physics_process_delta_time()
+	var st := "ride"
+	var push_t := -1.0
 
-	if controller.grinding:
-		hip_target = HIP_GRIND
-		tilt_target = -0.12
-	elif controller.grounded:
-		if inp.gesture == SkateInput.Gesture.PUSH and inp.foot_contact:
-			# Ayak doğrudan parmağın konumunu izler
-			foot_target = STROKE_START.lerp(STROKE_END, inp.push_progress)
-			hip_target = HIP_PUSH
-			tilt_target = PUSH_TILT
-			foot_sharp = 30.0
-		elif inp.gesture == SkateInput.Gesture.REVERSE and inp.foot_contact:
-			# Geri itme: ayak arkadan öne doğru yere sürtülür
-			foot_target = STROKE_END.lerp(STROKE_START, inp.push_progress) + Vector3(0, 0, -0.1)
-			hip_target = HIP_BRAKE
-			tilt_target = 0.2
-			foot_sharp = 30.0
-		elif inp.gesture == SkateInput.Gesture.PUSH or inp.gesture == SkateInput.Gesture.REVERSE:
-			# Vuruş bitti, parmak hâlâ ekranda: ayak havada bekler
-			foot_target = STROKE_END + Vector3(0, 0.12, -0.15)
-			hip_target = HIP_PUSH
-			tilt_target = PUSH_TILT * 0.6
-		elif inp.gesture == SkateInput.Gesture.BRAKE:
-			foot_target = BRAKE_FOOT
-			hip_target = HIP_BRAKE
-			tilt_target = 0.15
-			foot_sharp = 20.0
+	if controller.board_anim == SkateController.BoardAnim.MOUNTING:
+		st = "mount"
+	elif controller.board_anim == SkateController.BoardAnim.DISMOUNTING:
+		st = "dismount"
+	elif controller.on_foot:
+		var v := controller.speed
+		if v > 2.6:
+			st = "run"
+			_tree.set("parameters/run_scale/scale", clampf(v / run_anim_speed, 0.6, 2.5))
+		elif v > 0.15:
+			st = "walk"
+			_tree.set("parameters/walk_scale/scale", clampf(v / walk_anim_speed, 0.4, 2.5))
+		else:
+			st = "stand_idle"
+	elif controller.grinding:
+		st = "grind"
+	elif _special != "":
+		st = _special
+	elif not controller.grounded and (_air_t > 0.12 or _ollie_t < 0.3):
+		# Kısa kopmalarda (tümsek, kenar) hava pozuna geçme: titremeyi önler
+		st = "air"
+	elif _land_timer > 0.0:
+		st = "crouch"
+	elif inp.gesture == SkateInput.Gesture.PUSH and inp.foot_contact:
+		st = "push"
+		push_t = inp.push_progress
+	elif inp.gesture == SkateInput.Gesture.REVERSE and inp.foot_contact:
+		# Geri itme: ayak arkadan öne sürtülür, aynı animasyon tersine
+		st = "push"
+		push_t = 1.0 - inp.push_progress
+	elif inp.gesture == SkateInput.Gesture.BRAKE:
+		st = "brake"
+	_set_state(st)
+	if push_t >= 0.0:
+		_tree.set("parameters/push_seek/seek_request", push_t * _push_len)
 
-	# Kaykaya dönerken ayağı hafifçe havaya kaldır (yay çizerek)
-	var returning := foot_target == BACK_FOOT_ON_BOARD and _foot_pos.distance_to(foot_target) > 0.08
-	if returning:
-		foot_target.y += 0.12
-
-	_foot_pos = _foot_pos.lerp(foot_target, 1.0 - exp(-foot_sharp * delta))
-	_hip_pos = _hip_pos.lerp(hip_target, 1.0 - exp(-10.0 * delta))
-	_tilt = lerpf(_tilt, tilt_target, 1.0 - exp(-8.0 * delta))
-
-	# İniş / ollie esnemesi
-	_squash = lerpf(_squash, 0.0, 1.0 - exp(-8.0 * delta))
-	var crouch := Vector3(0, -absf(_squash) * 0.5, 0)
-
-	_rider.position = _hip_pos + crouch
-	_rider.rotation.x = _tilt
-	_back_foot.position = _foot_pos
-	_place_limb(_back_leg, _rider.position + Vector3(-0.08, -0.02, 0), _foot_pos)
-	_place_limb(_front_leg, _rider.position + Vector3(0.08, -0.02, 0), FRONT_FOOT)
-	_board.position.y = 0.0
+	# Sürüş karışımı: hız ve direksiyona yumuşakça tepki
+	var speed01 := clampf(absf(controller.speed) / fast_ride_speed, 0.0, 1.0)
+	_speed_blend = lerpf(_speed_blend, speed01, 1.0 - exp(-4.0 * dt))
+	var turn := controller.steer * clampf(absf(controller.speed) / 3.0, 0.0, 1.0)
+	_turn_blend = lerpf(_turn_blend, turn, 1.0 - exp(-8.0 * dt))
+	_tree.set("parameters/ride_speed/blend_amount", _speed_blend)
+	_tree.set("parameters/ride_turn/blend_amount", _turn_blend)
 
 
-func _update_sparks() -> void:
-	_sparks.emitting = controller.grinding
-	if controller.grinding:
-		var back := -controller.grind_dir
-		if absf(back.y) < 0.99:
-			_sparks.global_basis = Basis.looking_at(back, Vector3.UP)
+# ---------- Zıplamalar ----------
+
+func _start_special(name: String, from_time: float) -> void:
+	_special = name
+	_special_t = from_time
+	_special_len = _anim.get_animation(name).length
+	_state = ""   # aynı duruma tekrar geçişte de baştan başlasın
+	_set_state(name)
+	_tree.set("parameters/%s_seek/seek_request" % name, from_time)
 
 
-func _on_landed(impact: float) -> void:
-	_squash = clampf(impact * 0.06, 0.0, 0.35)
+## Fiziksel sıçrama oldu. Hazırlıklı ollie zaten oynuyor; raydan / kenardan
+## ani zıplamada animasyonu "pat" anından başlat.
+func _on_ollied() -> void:
+	_ollie_t = 0.0
+	if _special != "ollie":
+		_start_special("ollie", OLLIE_POP_TIME)
 
 
-# ---------- Yapım ----------
+# ---------- Kol sallanması (fizik) ----------
 
-func _build() -> void:
-	_board = Node3D.new()
-	add_child(_board)
-	_mesh_box(_board, Vector3(0.24, 0.03, 0.82), Vector3(0, DECK_Y, 0), Color(0.15, 0.75, 0.85))
-	_mesh_box(_board, Vector3(0.24, 0.031, 0.1), Vector3(0, DECK_Y + 0.025, -0.4), Color(0.15, 0.75, 0.85), 18.0)
-	_mesh_box(_board, Vector3(0.24, 0.031, 0.1), Vector3(0, DECK_Y + 0.025, 0.4), Color(0.15, 0.75, 0.85), -18.0)
-	for z in [-0.27, 0.27]:
-		for x in [-0.1, 0.1]:
-			var wheel := MeshInstance3D.new()
-			var cyl := CylinderMesh.new()
-			cyl.top_radius = 0.035
-			cyl.bottom_radius = 0.035
-			cyl.height = 0.04
-			cyl.radial_segments = 8
-			wheel.mesh = cyl
-			wheel.material_override = _mat(Color(1.0, 0.9, 0.3))
-			wheel.position = Vector3(x, 0.035, z)
-			wheel.rotation_degrees.z = 90.0
-			_board.add_child(wheel)
+## Kollara ani bir itki ver (ollie, iniş).
+func _kick_arms(impulse: Vector2) -> void:
+	for side in ["L", "R"]:
+		_sway_vel[side] += impulse
 
-	# Karakter: büyük kafalı çocuk (chibi oranlar)
-	_rider = Node3D.new()
-	add_child(_rider)
-	var torso := MeshInstance3D.new()
-	var cap := CapsuleMesh.new()
-	cap.radius = 0.16
-	cap.height = 0.5
-	cap.radial_segments = 8
-	cap.rings = 2
-	torso.mesh = cap
-	torso.material_override = _mat(Color(1.0, 0.35, 0.3))
-	torso.position = Vector3(0, 0.22, 0)
-	_rider.add_child(torso)
 
-	var head := MeshInstance3D.new()
-	var sph := SphereMesh.new()
-	sph.radius = 0.22
-	sph.height = 0.44
-	sph.radial_segments = 10
-	sph.rings = 6
-	head.mesh = sph
-	head.material_override = _mat(Color(1.0, 0.8, 0.62))
-	head.position = Vector3(0, 0.66, 0)
-	_rider.add_child(head)
-	# Şapka + siper (karakterin baktığı yönü gösterir: -Z)
-	_mesh_box(head, Vector3(0.4, 0.12, 0.36), Vector3(0, 0.15, 0), Color(0.25, 0.45, 1.0))
-	_mesh_box(head, Vector3(0.3, 0.03, 0.2), Vector3(0, 0.1, -0.22), Color(0.25, 0.45, 1.0))
-	for x in [-0.08, 0.08]:
-		_mesh_box(head, Vector3(0.04, 0.07, 0.02), Vector3(x, 0.0, -0.21), Color(0.1, 0.1, 0.15))
-	# Sırt çantası (kamera arkadan görür)
-	_mesh_box(_rider, Vector3(0.28, 0.32, 0.14), Vector3(0, 0.28, 0.19), Color(0.98, 0.75, 0.2))
+## Kollar bir yay gibi: hedef açı ortam koşullarından gelir, kollar ona sönümlü
+## salınımla yaklaşır. Böylece kas gücüyle değil, hız ve hareketle sallanırlar.
+func _update_arm_sway(delta: float) -> void:
+	if delta <= 0.0:
+		return
+	var speed := absf(controller.speed)
+	var accel := (controller.speed - _prev_speed) / delta
+	_prev_speed = controller.speed
+	var yaw := atan2(controller.heading.x, controller.heading.z)
+	var yaw_rate := wrapf(yaw - _prev_yaw, -PI, PI) / delta
+	_prev_yaw = yaw
+	# Sağa dönüşte (yaw azalır) merkezkaç kolları sola iter
+	var centrifugal := speed * -yaw_rate
 
-	_back_leg = _limb(Color(0.2, 0.3, 0.55))
-	_front_leg = _limb(Color(0.2, 0.3, 0.55))
-	_back_foot = _mesh_box(self, Vector3(0.1, 0.07, 0.17), _foot_pos, Color(0.95, 0.95, 0.95))
-	_front_foot = _mesh_box(self, Vector3(0.1, 0.07, 0.17), FRONT_FOOT, Color(0.95, 0.95, 0.95))
+	var on_foot := controller.on_foot
+	var wind := sway_wind * speed * (0.4 if on_foot else 1.0)
+	var inertia := clampf(accel, -12.0, 12.0) * sway_inertia
+	var step := 0.0
+	if on_foot and speed > 0.2:
+		_step_phase += delta * speed * 2.6
+		step = sin(_step_phase) * sway_step * clampf(speed / 2.0, 0.0, 1.0)
+	var air := 0.0
+	if not controller.grounded and not controller.grinding and not on_foot:
+		air = clampf(-controller.velocity.y * 0.04, -0.15, 0.25)   # düşerken kollar hafif kalkar
 
-	# Grind kıvılcımları (dünya uzayında kalır, arkada iz bırakır)
+	for side in ["L", "R"]:
+		var s := 1.0 if side == "L" else -1.0
+		var target := Vector2(
+			wind + inertia + step * s,
+			air + clampf(centrifugal * sway_turn * s, -0.35, 0.35))
+		var pos: Vector2 = _sway_pos[side]
+		var vel: Vector2 = _sway_vel[side]
+		vel += ((target - pos) * sway_stiffness - vel * sway_damping) * delta
+		pos += vel * delta
+		pos = pos.clamp(Vector2(-sway_max, -0.2), Vector2(sway_max, sway_max))
+		_sway_pos[side] = pos
+		_sway_vel[side] = vel
+
+	# Binme / inmede kaykayı tutan kol animasyona sadık kalsın
+	var weight := 0.25 if controller.board_anim != SkateController.BoardAnim.NONE else 1.0
+	_sway.left = _sway_pos["L"] * weight
+	_sway.right = _sway_pos["R"] * weight
+
+
+# ---------- Malzemeler ----------
+
+## İçe aktarılan düz renkli malzemeleri oyunun ortak shader'ına çevirir
+## (toon ışık, poligon titremesi vb. görünüm ayarları karaktere de uygulansın).
+func _convert_materials(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mesh: Mesh = node.mesh
+		for i in mesh.get_surface_count():
+			var src := mesh.surface_get_material(i)
+			var color := Color.WHITE
+			if src is BaseMaterial3D:
+				color = src.albedo_color
+			var m := ShaderMaterial.new()
+			m.shader = CHAR_SHADER
+			m.set_shader_parameter("albedo", color)
+			node.set_surface_override_material(i, m)
+	for child in node.get_children():
+		_convert_materials(child)
+
+
+# ---------- Grind kıvılcımları ----------
+
+func _build_sparks() -> void:
 	_sparks = CPUParticles3D.new()
 	_sparks.emitting = false
 	_sparks.amount = 28
@@ -233,45 +386,9 @@ func _build() -> void:
 	add_child(_sparks)
 
 
-func _limb(color: Color) -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.055
-	cyl.bottom_radius = 0.05
-	cyl.height = 1.0
-	cyl.radial_segments = 6
-	mi.mesh = cyl
-	mi.material_override = _mat(color)
-	add_child(mi)
-	return mi
-
-
-func _place_limb(mi: MeshInstance3D, a: Vector3, b: Vector3) -> void:
-	var dir := b - a
-	var length := dir.length()
-	if length < 0.001:
-		return
-	var y := dir / length
-	var ref := Vector3.RIGHT if absf(y.x) < 0.9 else Vector3.FORWARD
-	var x := ref.cross(y).normalized()
-	var z := x.cross(y)
-	mi.transform = Transform3D(Basis(x, y * length, z), (a + b) * 0.5)
-
-
-func _mesh_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, tilt_deg := 0.0) -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = size
-	mi.mesh = box
-	mi.material_override = _mat(color)
-	mi.position = pos
-	mi.rotation_degrees.x = tilt_deg
-	parent.add_child(mi)
-	return mi
-
-
-func _mat(color: Color) -> ShaderMaterial:
-	var m := ShaderMaterial.new()
-	m.shader = CHAR_SHADER
-	m.set_shader_parameter("albedo", color)
-	return m
+func _update_sparks() -> void:
+	_sparks.emitting = controller.grinding
+	if controller.grinding:
+		var back := -controller.grind_dir
+		if absf(back.y) < 0.99:
+			_sparks.global_basis = Basis.looking_at(back, Vector3.UP)

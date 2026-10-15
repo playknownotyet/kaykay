@@ -38,8 +38,7 @@ func set_style(style: Dictionary) -> void:
 		mat.set_shader_parameter(key, value)
 		if value is float and key != "pixel_size" and value > 0.0:
 			_style_active = true
-		elif key == "pixel_size" and value > 1.0:
-			_style_active = true
+
 
 
 func _process(_delta: float) -> void:

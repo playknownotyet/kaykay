@@ -24,6 +24,19 @@ func _run() -> void:
 	await _wait(0.5)
 	_log("başlangıç")
 
+	# Tepeye tırmanış: yerde/havada titreşimi sayılır (0 olmalı)
+	await _place(Vector3(-28, 0.05, 8), Vector3.FORWARD, 7.0)
+	var flips := 0
+	var was_g := p.grounded
+	for f in 150:
+		await get_tree().physics_frame
+		if p.grounded != was_g:
+			flips += 1
+			was_g = p.grounded
+	_log("tepeye tırmanış 2.5 sn: yerde/havada değişimi=%d" % flips)
+	await _place(Vector3(0, 0.05, 0), Vector3.FORWARD, 0.0)
+	await _wait(0.3)
+
 	for i in 3:
 		await _swipe_push(0.15, 2.0)
 		await _wait(0.4)
@@ -66,6 +79,30 @@ func _run() -> void:
 			await _shot("02_ollie")
 	_log("ollie: yükseklik=%.2f m, havada=%.2f sn" % [max_h, air])
 
+	# Double jump: ollie, havadayken tekrar -> daha yüksek, kaykay döner
+	await _place(Vector3(-12, 0.05, -10), Vector3.FORWARD, 4.0)
+	await _wait(0.2)
+	var gy := p.global_position.y
+	SkateInput.request_ollie()
+	var single_h := 0.0
+	for f in 90:
+		await get_tree().physics_frame
+		single_h = maxf(single_h, p.global_position.y - gy)
+	await _place(Vector3(-12, 0.05, -10), Vector3.FORWARD, 4.0)
+	await _wait(0.2)
+	SkateInput.request_ollie()
+	var dbl_h := 0.0
+	for f in 110:
+		await get_tree().physics_frame
+		if f == 20:
+			SkateInput.request_ollie()
+		if shots and f == 30:
+			await _shot("15_kickflip")
+		dbl_h = maxf(dbl_h, p.global_position.y - gy)
+	_log("ollie zirvesi %.2f m, double jump zirvesi %.2f m (oran %.2f)" % [single_h, dbl_h, dbl_h / maxf(single_h, 0.01)])
+	await _place(Vector3(8.6, 0.05, -45), Vector3.FORWARD, 3.0)
+	await _wait(0.2)
+
 	await _touch_path(0, [_sp(200, 400), _sp(200, 330), _sp(200, 280)], 0.05, false)
 	await _wait(1.5)
 	_log("yukarı sürt + basılı tut 1.5 sn: fren (hız 0)")
@@ -91,9 +128,15 @@ func _run() -> void:
 		await _wait(0.15)
 		await _shot("06_itme_arkadan")
 		SkateInput.touch_gesture_end()
+	await _place(Vector3(0, 0.05, 30), Vector3.FORWARD, 0.0)
+	await _wait(1.0)
+	var hand_still := _hand_local()
 	await _place(Vector3(0, 0.05, 40), Vector3.FORWARD, 11.0)
 	await _wait(1.5)
 	_log("yüksek hız (efekt tam güç)")
+	var hand_fast := _hand_local()
+	print("KOL: el (görsel uzay, +z = geri) dururken z=%.3f, hızlıyken z=%.3f -> %s" % [
+		hand_still.z, hand_fast.z, "geride (doğru)" if hand_fast.z > hand_still.z + 0.02 else "GERİDE DEĞİL"])
 	if shots:
 		await _shot("07_yuksek_hiz")
 		main.fx.enabled = false
@@ -124,7 +167,7 @@ func _run() -> void:
 	_log("kaldırıma ollie'siz çarpma (z ~ -57.5'te durmalı)")
 
 	await _place(Vector3(0, 0.05, -50), Vector3.FORWARD, 6.0)
-	await _wait(1.05)
+	await _wait(0.95)
 	SkateInput.request_ollie()
 	await _wait(1.5)
 	_log("kaldırım öncesi ollie (z < -58.5 olmalı)")
@@ -144,7 +187,7 @@ func _run() -> void:
 
 	var dir := Vector3(sin(deg_to_rad(50)), 0, -cos(deg_to_rad(50)))
 	await _place(Vector3(13, 0.05, -37), dir, 6.0)
-	await _wait(0.25)
+	await _wait(0.12)
 	SkateInput.request_ollie()
 	r = await _watch_grind(3.0, "10_boardslide")
 	_log("50° giriş: süre=%.2f sn, stil=%s (boardslide beklenir)" % [r.time, r.style])
@@ -167,6 +210,59 @@ func _run() -> void:
 	SkateInput.request_ollie()
 	r = await _watch_grind(5.0, "")
 	_log("eğimli ray: süre=%.2f sn, en yüksek hız=%.1f m/s" % [r.time, r.max_speed])
+
+	# ---------- Yüzey titreşimi ----------
+	for case in [["asfalt", Vector3(-6, 0.05, 5)], ["arnavut", Vector3(-15, 0.06, 8)]]:
+		await _place(case[1], Vector3.FORWARD, 6.0)
+		await _wait(0.3)
+		var n0 := Haptics.instance.pulse_count
+		var cam_max := 0.0
+		for f in 90:
+			await get_tree().physics_frame
+			cam_max = maxf(cam_max, main.camera.feedback.camera_rumble)
+		if shots and case[0] == "arnavut":
+			await _shot("16_arnavut")
+		_log("%s 1.5 sn: zemin=%s, titreşim darbesi=%d, kamera titremesi=%.4f" % [
+			case[0], p.floor_surface, Haptics.instance.pulse_count - n0, cam_max])
+	await _place(Vector3(4.5, 0.05, -2), Vector3.FORWARD, 6.0)
+	await _wait(0.33)
+	var g0 := Haptics.instance.pulse_count
+	SkateInput.request_ollie()
+	await _wait(2.0)
+	_log("metal grind dahil 2 sn: titreşim darbesi=%d" % (Haptics.instance.pulse_count - g0))
+
+	# ---------- Yaya ----------
+	await _place(Vector3(-8, 0.05, 0), Vector3.FORWARD, 3.0)
+	await _wait(0.3)
+	SkateInput.request_board_toggle()
+	await _wait(0.25)
+	if shots:
+		await _shot("10b_inme")
+	await _wait(0.45)
+	_log("kaykaydan indi (yürüyor beklenir)")
+	if shots:
+		await _shot("11_ayakta")
+	SkateInput.set_joystick(Vector2(0, 0.6))
+	await _wait(1.2)
+	_log("joystick yarım: yürüme (hız ~1.8)")
+	SkateInput.set_joystick(Vector2(0, 1))
+	await _wait(1.0)
+	_log("joystick tam: koşu (hız ~4)")
+	if shots:
+		await _shot("12_yurume")
+	SkateInput.set_joystick(Vector2(1, 0))
+	await _wait(1.0)
+	if shots:
+		await _shot("13_yurume_yan")
+	SkateInput.set_joystick(Vector2.ZERO)
+	await _wait(0.5)
+	_log("sağa yürüyüp durdu")
+	SkateInput.request_board_toggle()
+	await _wait(0.25)
+	if shots:
+		await _shot("14_binme")
+	await _wait(0.5)
+	_log("kaykaya bindi (koşarak, hız ~3)")
 
 	if shots:
 		for i in main.look.PRESETS.size():
@@ -260,6 +356,15 @@ func _place(pos: Vector3, heading: Vector3, speed: float) -> void:
 	await get_tree().physics_frame
 
 
+## Sol elin görsel düğüme göre konumu (görsel uzay: ileri -Z).
+func _hand_local() -> Vector3:
+	var vis: Node3D = p.get_node("Visual")
+	var skel: Skeleton3D = vis.find_child("Skeleton3D", true, false)
+	var idx := skel.find_bone("hand.L")
+	var g := skel.global_transform * skel.get_bone_global_pose(idx)
+	return vis.global_transform.affine_inverse() * g.origin
+
+
 func _wait(sec: float) -> void:
 	var t := 0.0
 	while t < sec:
@@ -276,5 +381,6 @@ func _shot(name: String) -> void:
 
 func _log(label: String) -> void:
 	var pos := p.global_position
+	var st := "yürüyor" if p.on_foot else ("yerde" if p.grounded else "havada")
 	print("%-50s hız=%5.2f m/s  konum=(%.1f, %.2f, %.1f)  %s" % [
-		label, p.speed, pos.x, pos.y, pos.z, "yerde" if p.grounded else "havada"])
+		label, p.speed, pos.x, pos.y, pos.z, st])

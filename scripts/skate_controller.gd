@@ -9,50 +9,72 @@ extends CharacterBody3D
 
 signal landed(impact: float)
 signal ollied
+signal ollie_started      # çökme (hazırlık) başladı; asıl sıçrama ollie_windup sonra
+signal double_jumped
+signal wall_hit(strength: float)   # duvara / bordüre çarpma (m/sn cinsinden şiddet)
 signal grind_started
 signal grind_ended
+signal mode_changed(on_foot: bool)
 
 # --- Ayar panelinden değiştirilebilen değerler ---
-@export var gravity := 15.0
+@export var gravity := 14.5
 ## Düz zeminde kendiliğinden yavaşlama (m/sn²).
-@export var rolling_resistance := 0.22
+@export var rolling_resistance := 0.19
 ## Hızın karesiyle artan hava direnci; azami hızı yumuşakça sınırlar.
-@export var air_drag := 0.012
+@export var air_drag := 0.009
 ## Ayak yere bastığında hızın ayak hızına ne kadar çabuk yaklaştığı.
-@export var push_grip := 4.0
-@export var brake_strength := 7.0
+@export var push_grip := 3.9
+@export var brake_strength := 6.8
 ## Ayakla geri itmenin verimi (1 = ileri itme kadar kolay). Düşük = daha çok efor.
-@export var reverse_efficiency := 0.55
-@export var reverse_max_speed := 3.0
-@export var max_speed := 16.0
+@export var reverse_efficiency := 0.5
+@export var reverse_max_speed := 2.9
+@export var max_speed := 14.0
 ## Hızlıyken en dar dönüş yarıçapı (metre).
-@export var turn_radius := 2.8
+@export var turn_radius := 2.5
 ## Dururken / çok yavaşken dönüş hızı (rad/sn).
-@export var min_turn_rate := 1.4
-@export var max_turn_rate := 2.6
+@export var min_turn_rate := 1.35
+@export var max_turn_rate := 2.5
 ## Butonla direksiyonda dönüşün tam güce çıkma hızı (1/sn).
-@export var steer_response := 4.0
-@export var steer_return := 8.0
+@export var steer_response := 3.5
+@export var steer_return := 7.5
 @export var ollie_speed := 4.2
+## Ollie öncesi dizlerin çöktüğü süre (sn); animasyondaki OLLIE_POP_FRAME ile aynı
+@export var ollie_windup := 0.1
+## Havada ikinci zıplama: normal ollie yüksekliğinin bu katı
+@export var double_jump_height := 1.3
 @export var air_steer_rate := 2.0
 ## Duvara sürterken kaybedilen hız oranı.
 @export var wall_speed_loss := 0.5
 @export var floor_snap := 0.35
+## Yerdeyken zemine bastırma hızı (m/sn); ileri hıza etkisi yok.
+@export var ground_stick := 1.0
+
+# --- Yaya ---
+@export var walk_speed := 1.8
+@export var run_speed := 4.0
+@export var walk_accel := 10.0
+@export var walk_turn_rate := 10.0
+
+# Binme / inme animasyonlarıyla aynı süre ve hız (tools/blender/karakter_rig.py)
+const MOUNT_TIME := 0.5
+const MOUNT_SPEED := 3.0
+const DISMOUNT_TIME := 0.5
+enum BoardAnim { NONE, MOUNTING, DISMOUNTING }
 
 # --- Grind ---
 ## Havadayken raya bu kadar yatay yakınlıkta (m) kendiliğinden tutunur.
-@export var grind_latch_radius := 0.6
+@export var grind_latch_radius := 0.55
 ## Yaklaşma açısı bundan büyükse (raya fazla dik) tutunmaz.
-@export var grind_max_angle := 70.0
+@export var grind_max_angle := 69.0
 ## Bu açının altında 50-50, üstünde boardslide.
-@export var boardslide_angle := 35.0
-@export var grind_friction := 0.5
+@export var boardslide_angle := 36.0
+@export var grind_friction := 0.55
 ## Raya tutununca en az bu hızla kayar (m/sn); yavaş girişler de akıcı olsun.
 @export var grind_min_speed := 3.0
 ## Rayın sonunda kendiliğinden çıkarken hafif yukarı sıçrama.
-@export var grind_exit_pop := 1.5
+@export var grind_exit_pop := 1.4
 ## Raydan ollie ile çıkarken joystick ile yana itme.
-@export var grind_side_jump := 2.5
+@export var grind_side_jump := 2.2
 
 # --- Durum (görsel ve kamera okur) ---
 var speed := 0.0
@@ -66,6 +88,10 @@ var grinding := false
 var grind_style := 0                # 0 = 50-50 (ray boyunca), 1 = boardslide (dik)
 var grind_time := 0.0
 var grind_dir := Vector3.FORWARD    # 3D gidiş yönü (eğimli raylarda eğik)
+var on_foot := false                # kaykaydan inmiş, yürüyor
+var floor_surface := "asfalt"       # üstünde olunan yüzey türü (level_builder "surface" bilgisi)
+var board_anim: int = BoardAnim.NONE  # binme / inme sürüyor mu
+var board_anim_time := 0.0
 
 var _coyote := 0.0
 var _ollie_buffer := 0.0
@@ -79,6 +105,9 @@ var _last_rail: GrindRail
 var _last_rail_timer := 0.0
 
 const COYOTE_TIME := 0.1
+var _windup := -1.0          # >= 0: ollie hazırlığı sürüyor
+var _double_used := false
+var _jump_base_y := 0.0      # son kalkışın (yerden ayrılma) yüksekliği
 const OLLIE_BUFFER_TIME := 0.12
 
 
@@ -102,6 +131,11 @@ func _ready() -> void:
 
 func respawn() -> void:
 	cancel_grind()
+	board_anim = BoardAnim.NONE
+	if on_foot:
+		on_foot = false
+		SkateInput.set_on_foot(false)
+		mode_changed.emit(false)
 	global_transform = _spawn
 	heading = Vector3.FORWARD
 	speed = 0.0
@@ -120,6 +154,19 @@ func _physics_process(delta: float) -> void:
 	_ollie_lock = maxf(_ollie_lock - delta, 0.0)
 	_last_rail_timer = maxf(_last_rail_timer - delta, 0.0)
 
+	if inp.consume_board_toggle():
+		toggle_board()
+
+	if board_anim != BoardAnim.NONE:
+		_ollie_buffer = 0.0
+		_board_anim_move(delta)
+		return
+
+	if on_foot:
+		_ollie_buffer = 0.0
+		_foot_move(delta)
+		return
+
 	if grinding:
 		_grind_move(delta)
 		return
@@ -129,8 +176,7 @@ func _physics_process(delta: float) -> void:
 	else:
 		_air_move(delta)
 
-	if _ollie_buffer > 0.0 and (grounded or _coyote > 0.0):
-		_do_ollie()
+	_handle_jump_input(delta)
 
 	floor_snap_length = 0.0 if _ollie_lock > 0.0 else floor_snap
 	var pre_velocity := velocity
@@ -198,7 +244,9 @@ func _ground_move(inp: Node, delta: float) -> void:
 	heading = Vector3(heading.x, 0.0, heading.z).normalized()
 	fwd = _project_on_plane(heading, n)
 	forward_on_ground = fwd
-	velocity = fwd * speed
+	# Zemine doğru hafif bastırma: Godot yukarı hareket ederken zemine yapıştırmayı
+	# kapatır; bu olmadan rampa çıkarken her kare "havada" olur ve animasyon titrer.
+	velocity = fwd * speed - n * ground_stick
 	inp.board_speed = speed
 
 
@@ -210,10 +258,45 @@ func _air_move(delta: float) -> void:
 	forward_on_ground = heading
 
 
+## Zıplama girdisi: yerde -> kısa çökme sonra ollie; kenardan yeni çıktıysa
+## (coyote) -> hemen ollie; havada -> bir kez double jump (kickflip).
+func _handle_jump_input(delta: float) -> void:
+	if _windup >= 0.0:
+		_windup -= delta
+		if _windup < 0.0:
+			if grounded or _coyote > 0.0:
+				_do_ollie()
+		return
+	if _ollie_buffer <= 0.0:
+		return
+	if grounded:
+		_ollie_buffer = 0.0
+		_windup = ollie_windup
+		ollie_started.emit()
+	elif _coyote > 0.0:
+		_do_ollie()
+	elif not _double_used and air_time > 0.12:
+		_ollie_buffer = 0.0
+		_double_used = true
+		# Toplam zirve = normal ollie zirvesinin double_jump_height katı (kalkış noktasına göre)
+		var ollie_peak := ollie_speed * ollie_speed / (2.0 * gravity)
+		var remaining := ollie_peak * double_jump_height - (global_position.y - _jump_base_y)
+		velocity.y = sqrt(2.0 * gravity * maxf(remaining, 0.08))
+		double_jumped.emit()
+
+
+## Ollie hazırlığı (çökme) sürüyor mu? Görsel bunu bilir.
+func is_winding_up() -> bool:
+	return _windup >= 0.0
+
+
 func _do_ollie() -> void:
+	_jump_base_y = global_position.y
 	_ollie_buffer = 0.0
 	_coyote = 0.0
 	_ollie_lock = 0.15
+	if grounded:
+		velocity += ground_normal * ground_stick   # zemine bastırmayı geri al
 	velocity += Vector3.UP * ollie_speed
 	grounded = false
 	air_time = 0.0
@@ -224,6 +307,8 @@ func _after_move(pre_velocity: Vector3) -> void:
 	var was_grounded := grounded
 	grounded = is_on_floor() and _ollie_lock <= 0.0
 
+	if grounded:
+		_double_used = false
 	if grounded and not was_grounded:
 		var n := get_floor_normal()
 		var fwd := _project_on_plane(heading, n)
@@ -233,11 +318,32 @@ func _after_move(pre_velocity: Vector3) -> void:
 		air_time = 0.0
 		landed.emit(impact)
 	elif was_grounded and not grounded and _ollie_lock <= 0.0:
-		# Rampadan uçtu veya kenardan düştü: kısa süre yine ollie yapılabilir
+		_jump_base_y = global_position.y
+		# Rampadan uçtu veya kenardan düştü: zemine bastırmayı geri al,
+		# kısa süre yine ollie yapılabilir
+		velocity += ground_normal * ground_stick
 		_coyote = COYOTE_TIME
 		air_time = 0.0
 
+	_update_floor_surface()
 	_handle_walls()
+
+
+## Yerdeki gövdenin yüzey türünü oku (titreşim ve kamera hissi bunu kullanır).
+func _update_floor_surface() -> void:
+	var wall_dot := cos(floor_max_angle)
+	for i in get_slide_collision_count():
+		var c := get_slide_collision(i)
+		if c.get_normal().y >= wall_dot:
+			var body := c.get_collider() as Node
+			if body:
+				floor_surface = body.get_meta("surface", "asfalt")
+			return
+
+
+## Grind yapılan rayın yüzeyi ("metal" / "beton").
+func grind_surface() -> String:
+	return _rail.surface if _rail else "metal"
 
 
 func _handle_walls() -> void:
@@ -255,6 +361,7 @@ func _handle_walls() -> void:
 			worst = nh
 	if worst_into <= 0.0:
 		return
+	wall_hit.emit(absf(speed) * worst_into)
 	if worst_into > 0.85:
 		# Kafa kafaya çarpma: hafif geri sekme
 		speed = -speed * 0.15
@@ -263,6 +370,92 @@ func _handle_walls() -> void:
 		# Sıyırma: duvara paralel yöne dön, biraz hız kaybet
 		heading = (heading - worst * heading.dot(worst)).normalized()
 		speed *= 1.0 - worst_into * wall_speed_loss
+
+
+# ---------- Yaya ----------
+
+## Kaykaydan in / kaykaya bin. Animasyonlu: binerken koşup kaykayı öne atar ve
+## üstüne zıplar; inerken kaykaydan atlayıp onu altından çekip eline alır.
+func toggle_board() -> void:
+	if board_anim != BoardAnim.NONE:
+		return
+	if on_foot:
+		board_anim = BoardAnim.MOUNTING
+	elif grounded and not grinding:
+		board_anim = BoardAnim.DISMOUNTING
+		SkateInput.set_on_foot(true)   # inerken itme hareketleri kapansın
+	else:
+		return
+	board_anim_time = 0.0
+
+
+func _board_anim_move(delta: float) -> void:
+	board_anim_time += delta
+	if board_anim == BoardAnim.MOUNTING:
+		speed = MOUNT_SPEED
+	else:
+		speed = move_toward(speed, 0.0, 9.0 * delta)
+	var hv := heading * speed
+	velocity.x = hv.x
+	velocity.z = hv.z
+	velocity.y = -0.5 if is_on_floor() else velocity.y - gravity * delta
+	forward_on_ground = heading
+	ground_normal = Vector3.UP
+	floor_snap_length = floor_snap
+	move_and_slide()
+	grounded = is_on_floor()
+
+	if board_anim == BoardAnim.MOUNTING and board_anim_time >= MOUNT_TIME:
+		board_anim = BoardAnim.NONE
+		on_foot = false
+		speed = MOUNT_SPEED
+		SkateInput.set_on_foot(false)
+		mode_changed.emit(false)
+	elif board_anim == BoardAnim.DISMOUNTING and board_anim_time >= DISMOUNT_TIME:
+		board_anim = BoardAnim.NONE
+		on_foot = true
+		speed = minf(speed, walk_speed)
+		mode_changed.emit(true)
+
+
+func _foot_move(delta: float) -> void:
+	var mv: Vector2 = SkateInput.move_vector
+	var want := Vector3.ZERO
+	var cam := get_viewport().get_camera_3d()
+	if cam and mv.length() > 0.0:
+		var f := -cam.global_basis.z
+		var r := cam.global_basis.x
+		f = Vector3(f.x, 0.0, f.z).normalized()
+		r = Vector3(r.x, 0.0, r.z).normalized()
+		want = (r * mv.x + f * mv.y).limit_length(1.0)
+
+	# Joystick yarıya kadar: yürüme; sonuna kadar: koşu
+	var mag := want.length()
+	var target_speed := 0.0
+	if mag > 0.0:
+		target_speed = walk_speed * minf(mag / 0.7, 1.0)
+		if mag > 0.75:
+			target_speed = lerpf(walk_speed, run_speed, (mag - 0.75) / 0.25)
+	var hv := Vector3(velocity.x, 0.0, velocity.z)
+	var dir := want.normalized() if mag > 0.0 else Vector3.ZERO
+	hv = hv.move_toward(dir * target_speed, walk_accel * delta)
+	if want.length() > 0.1:
+		var ang := heading.signed_angle_to(want.normalized(), Vector3.UP)
+		heading = heading.rotated(Vector3.UP, clampf(ang, -walk_turn_rate * delta, walk_turn_rate * delta)).normalized()
+
+	velocity.x = hv.x
+	velocity.z = hv.z
+	velocity.y = -0.5 if is_on_floor() else velocity.y - gravity * delta
+	speed = hv.length()
+	forward_on_ground = heading
+	ground_normal = Vector3.UP
+	floor_snap_length = floor_snap
+	move_and_slide()
+	grounded = is_on_floor()
+	_update_floor_surface()
+	SkateInput.board_speed = 0.0
+	if global_position.y < -10.0:
+		respawn()
 
 
 # ---------- Grind ----------
@@ -310,6 +503,8 @@ func _start_grind(rail: GrindRail, s: float, align: float, h_speed: float) -> vo
 	# Çapraz girişte hızın bir kısmı kaybolur ama asla çok yavaş kalmaz
 	speed = maxf(h_speed * lerpf(0.7, 1.0, absf(align)), grind_min_speed)
 	_snap_offset = global_position - rail.point_at(s)
+	_double_used = false
+	_windup = -1.0
 	grinding = true
 	grounded = false
 	grind_time = 0.0

@@ -1,6 +1,11 @@
 extends Node3D
 ## Test sahnesi: ışık, gökyüzü, oyuncu, kamera ve arayüzü kurar.
 ## Pist geometrisi sahnedeki "Level" düğümünde (level_builder.gd).
+##
+## Retro görüntü: tüm 3D dünya + ekran efekti küçük bir "sanal ekranda"
+## (SubViewport, örn. 457x206) çizilir ve pikseller yumuşatılmadan büyütülür.
+## Böylece pikseller keskin kalır, zayıf telefonlarda da hızlı çalışır.
+## Arayüz (butonlar, yazılar) tam çözünürlükte, ayrı katmanda çizilir.
 
 const SkateControllerScript := preload("res://scripts/skate_controller.gd")
 const PlayerVisualScript := preload("res://scripts/player_visual.gd")
@@ -16,37 +21,58 @@ var fx: ColorRect
 var look: Node
 var env: Environment
 var sun: DirectionalLight3D
+## 3D dünyanın çizildiği düşük çözünürlüklü sanal ekran
+var world: SubViewport
+var _world_view: TextureRect
+var _pixel_size := 1.0
 
 
 func _ready() -> void:
+	_setup_performance()
+	_build_world_view()
+
+	# Sahnedeki pisti sanal ekrana taşı
+	var level := $Level
+	remove_child(level)
+	world.add_child(level)
+
 	_build_environment()
 
 	player = SkateControllerScript.new()
 	player.name = "Player"
-	add_child(player)
+	world.add_child(player)
 	var visual := Node3D.new()
 	visual.name = "Visual"
 	visual.set_script(PlayerVisualScript)
 	player.add_child(visual)
 
+	# Titreşim (telefon) ve yüzey hissi
+	var haptics := Haptics.new()
+	haptics.name = "Haptics"
+	add_child(haptics)
+	var feedback := SurfaceFeedback.new()
+	feedback.name = "Feedback"
+	player.add_child(feedback)
+
 	camera = FollowCameraScript.new()
 	camera.name = "Camera"
 	camera.target = player
-	add_child(camera)
+	camera.feedback = feedback
+	world.add_child(camera)
 	camera.make_current()
 
-	# Hız efekti 3D'nin üstünde, arayüzün altında çizilir
+	# Hız efekti / retro filtre de düşük çözünürlükte çizilir (hem ucuz hem keskin)
 	var post := CanvasLayer.new()
-	post.layer = 1
-	add_child(post)
+	world.add_child(post)
 	fx = SpeedFxScript.new()
 	fx.camera = camera
 	post.add_child(fx)
 
 	look = LookManagerScript.new()
 	look.name = "Look"
-	var look_roots: Array[Node] = [$Level, player]
+	var look_roots: Array[Node] = [level, player]
 	look.setup(env, sun, fx, look_roots)
+	look.pixel_size_changed.connect(set_pixel_size)
 	add_child(look)
 	look.apply()
 
@@ -58,6 +84,49 @@ func _ready() -> void:
 	var hud := HudScript.new()
 	ui.add_child(hud)
 	hud.setup(player, camera, visual, fx, look, touch)
+
+
+## Bir sanal ekran pikselinin gerçek ekranda kaç piksel olacağı.
+func set_pixel_size(value: float) -> void:
+	_pixel_size = maxf(value, 1.0)
+	_resize_world()
+
+
+func _build_world_view() -> void:
+	world = SubViewport.new()
+	world.name = "World"
+	world.msaa_3d = Viewport.MSAA_DISABLED
+	world.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	world.physics_object_picking = false
+	add_child(world)
+
+	var layer := CanvasLayer.new()
+	layer.layer = 0
+	add_child(layer)
+	_world_view = TextureRect.new()
+	_world_view.texture = world.get_texture()
+	_world_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_world_view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_world_view.stretch_mode = TextureRect.STRETCH_SCALE
+	_world_view.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_world_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(_world_view)
+
+	get_viewport().size_changed.connect(_resize_world)
+	_resize_world()
+
+
+func _resize_world() -> void:
+	var screen := get_viewport().get_visible_rect().size
+	world.size = Vector2i(ceili(screen.x / _pixel_size), ceili(screen.y / _pixel_size))
+
+
+## Zayıf telefonlar için çizim ayarları. Retro görünümde kenar yumuşatma
+## işe yaramaz, gölgeler de sert ve tek kademeli daha iyi durur.
+func _setup_performance() -> void:
+	get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+	RenderingServer.directional_shadow_atlas_set_size(1024, true)
+	RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD)
 
 
 func _build_environment() -> void:
@@ -82,12 +151,13 @@ func _build_environment() -> void:
 	env.fog_density = 0.004
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
-	add_child(world_env)
+	world.add_child(world_env)
 
 	sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-52, -35, 0)
 	sun.light_color = Color(1.0, 0.95, 0.85)
 	sun.light_energy = 1.15
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 45.0
-	add_child(sun)
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	sun.directional_shadow_max_distance = 30.0
+	world.add_child(sun)

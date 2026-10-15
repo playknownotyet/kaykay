@@ -4,6 +4,7 @@ extends Node3D
 ## Oyuncu (0, 0, 0) noktasında -Z yönüne bakarak başlar.
 
 const GRID_SHADER := preload("res://shaders/grid.gdshader")
+const COBBLE_SHADER := preload("res://shaders/cobble.gdshader")
 
 const COL_GROUND := Color(0.62, 0.68, 0.78)
 const COL_GRASS := Color(0.42, 0.78, 0.36)
@@ -20,6 +21,10 @@ const BUILDING_COLORS := [
 ]
 
 var _materials := {}
+## Bundan sonra eklenen parçaların yüzey türü (titreşim / kamera hissi için).
+## Kaykay kontrolcüsü yerdeki gövdenin "surface" bilgisini okur.
+var _surface := "asfalt"
+var _ground_holes: Array[Vector4] = []   # zeminin çizilmeyeceği alanlar (arnavut kaldırımı altı)
 
 
 func _ready() -> void:
@@ -32,17 +37,28 @@ func _build() -> void:
 	# Zemin: geniş meydan + etrafında çim halkası (üst üste binmez).
 	# Karolara bölünmüş düzlemler: poligon titremesi (vertex snap) dev
 	# üçgenlerde derinliği bozar, küçük karolarda bozmaz.
+	_surface = "asfalt"
 	_add_ground(Vector3(0, 0, 0), Vector2(200, 200), COL_GROUND, 2.0)
+	_surface = "cim"
 	_add_ground(Vector3(0, 0, 115), Vector2(260, 30), COL_GRASS, 4.0)
 	_add_ground(Vector3(0, 0, -115), Vector2(260, 30), COL_GRASS, 4.0)
 	_add_ground(Vector3(115, 0, 0), Vector2(30, 200), COL_GRASS, 4.0)
 	_add_ground(Vector3(-115, 0, 0), Vector2(30, 200), COL_GRASS, 4.0)
 
+	# Arnavut kaldırımı: başlangıcın solunda uzun şerit + kaldırımlardan sonra
+	# yolu boydan boya kesen meydan (titreşim / kamera hissini denemek için)
+	_add_cobble(Vector3(-15, 0, -20), Vector2(6, 60))
+	_add_cobble(Vector3(0, 0, -86), Vector2(40, 12))
+	_apply_ground_holes()
+
+	_surface = "asfalt"
 	# Başlangıç düzlüğü: slalom dubaları
 	for i in range(6):
 		var x := 1.2 if i % 2 == 0 else -1.2
 		_add_cylinder(Vector3(x, 0, -14 - i * 6), 0.18, 0.7, COL_CONE)
 
+	# Rampalar kontrplak (tahta)
+	_surface = "tahta"
 	# Küçük kicker rampa (ollie'siz uçmak için)
 	_add_wedge(Vector3(7, 0, -22), 2.4, 0.55, 2.6, 0.0, COL_RAMP)
 
@@ -51,9 +67,10 @@ func _build() -> void:
 	_add_box(Vector3(-9, 0.4, -29.6), Vector3(3.0, 0.8, 4.0), COL_RAMP)
 	_add_wedge(Vector3(-9, 0, -33.2), 3.0, 0.8, 3.2, 180.0, COL_RAMP)
 	for x in [-10.5, -7.5]:
-		_add_grind_line(Vector3(x, 0.8, -27.6), Vector3(x, 0.8, -31.6))
+		_add_grind_line(Vector3(x, 0.8, -27.6), Vector3(x, 0.8, -31.6), "metal")   # rampa ağzı (coping)
 
-	# Kaldırım ve bank sırası (ollie ile geçilecek)
+	# Kaldırım ve bank sırası (ollie ile geçilecek): beton
+	_surface = "beton"
 	_add_box(Vector3(0, 0.075, -58), Vector3(10, 0.15, 0.4), COL_CURB)
 	_add_box(Vector3(0, 0.075, -66), Vector3(10, 0.15, 0.4), COL_CURB)
 	_add_box(Vector3(-5, 0.22, -74), Vector3(3, 0.45, 0.6), COL_LEDGE)
@@ -65,6 +82,7 @@ func _build() -> void:
 
 	# Grind: korkuluk ve kenar
 	_add_rail(Vector3(15, 0.38, -35), Vector3(15, 0.38, -45))
+	_surface = "beton"
 	_add_box(Vector3(20, 0.2, -40), Vector3(0.6, 0.4, 10), COL_LEDGE)
 	_add_grind_line(Vector3(20, 0.4, -35), Vector3(20, 0.4, -45))
 
@@ -72,6 +90,7 @@ func _build() -> void:
 	_add_rail(Vector3(4.5, 0.38, -6), Vector3(4.5, 0.38, -18))
 
 	# Uzun tepe: yavaş tırmanış, düzlük, keyifli iniş
+	_surface = "asfalt"
 	_add_wedge(Vector3(-28, 0, -10), 8.0, 3.0, 30.0, 0.0, COL_HILL)
 	_add_box(Vector3(-28, 1.5, -32.5), Vector3(8.0, 3.0, 15.0), COL_HILL)
 	_add_wedge(Vector3(-28, 0, -55), 8.0, 3.0, 30.0, 180.0, COL_HILL)
@@ -79,8 +98,9 @@ func _build() -> void:
 	_add_rail(Vector3(-25.5, 3.25, -41), Vector3(-25.5, 0.4, -69.5))
 
 	# Eğimli duvar (bank)
+	_surface = "beton"
 	_add_wedge(Vector3(34, 0, -40), 30.0, 2.2, 3.5, -90.0, COL_BANK)
-	_add_grind_line(Vector3(35.75, 2.2, -25.5), Vector3(35.75, 2.2, -54.5))
+	_add_grind_line(Vector3(35.75, 2.2, -25.5), Vector3(35.75, 2.2, -54.5), "metal")
 
 	# Uzaktaki renkli bloklar: yön bulmak ve hız hissi için
 	var rng := RandomNumberGenerator.new()
@@ -125,6 +145,7 @@ func _add_body(pos: Vector3, yaw_deg: float, mesh: Mesh, shape: Shape3D, color: 
 	var col := CollisionShape3D.new()
 	col.shape = shape
 	body.add_child(col)
+	body.set_meta("surface", _surface)
 	add_child(body)
 	return body
 
@@ -147,19 +168,61 @@ func _add_rail(a: Vector3, b: Vector3) -> void:
 	shape.size = mesh.size
 	col.shape = shape
 	body.add_child(col)
+	body.set_meta("surface", "metal")
 	add_child(body)
 	# Ayaklar: rayın 0.35 m altına kadar (zemine ya da eğime değer)
 	var posts := maxi(int(length / 4.0), 1) + 1
 	for i in posts:
 		var p := a.lerp(b, (i + 0.5) / float(posts))
 		_add_box(p - Vector3(0, 0.2, 0), Vector3(0.06, 0.34, 0.06), COL_RAIL, 0.5)
-	_add_grind_line(a, b)
+	_add_grind_line(a, b, "metal")
 
 
-func _add_grind_line(a: Vector3, b: Vector3) -> void:
+## surface boşsa o anki _surface (örn. beton kenar) kullanılır.
+func _add_grind_line(a: Vector3, b: Vector3, surface := "") -> void:
 	var rail := GrindRail.new()
 	add_child(rail)
-	rail.setup(a, b)
+	rail.setup(a, b, surface if surface != "" else _surface)
+
+
+## Zemin malzemesine delikleri ver: arnavut kaldırımının altındaki zemin çizilmez.
+func _apply_ground_holes() -> void:
+	var mat := _material(COL_GROUND, 2.0)
+	var arr := PackedVector4Array()
+	for h in _ground_holes:
+		arr.append(h)
+	while arr.size() < 8:
+		arr.append(Vector4.ZERO)
+	mat.set_shader_parameter("holes", arr)
+	mat.set_shader_parameter("hole_count", _ground_holes.size())
+
+
+## Arnavut kaldırımı alanı: zeminden 1.2 cm yüksek (girişte hafif bir sarsıntı da verir).
+## Altındaki zemin çizilmez (bkz. _apply_ground_holes), böylece katmanlar titreşmez.
+func _add_cobble(center: Vector3, size: Vector2) -> void:
+	# Delik kaldırımdan 2 cm küçük: kenarda boşluk görünmesin
+	_ground_holes.append(Vector4(center.x - size.x * 0.5 + 0.02, center.z - size.y * 0.5 + 0.02,
+		center.x + size.x * 0.5 - 0.02, center.z + size.y * 0.5 - 0.02))
+	var mesh := PlaneMesh.new()
+	mesh.size = size
+	mesh.subdivide_width = maxi(int(size.x / 3.0) - 1, 0)
+	mesh.subdivide_depth = maxi(int(size.y / 3.0) - 1, 0)
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(size.x, 0.2, size.y)
+	var body := StaticBody3D.new()
+	body.position = center + Vector3(0, 0.012, 0)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	var mat := ShaderMaterial.new()
+	mat.shader = COBBLE_SHADER
+	mi.material_override = mat
+	body.add_child(mi)
+	var col := CollisionShape3D.new()
+	col.shape = shape
+	col.position.y = -0.1
+	body.add_child(col)
+	body.set_meta("surface", "arnavut")
+	add_child(body)
 
 
 ## Yatay zemin: görsel olarak ~5 m karolara bölünmüş düzlem, çarpışma için ince kutu.

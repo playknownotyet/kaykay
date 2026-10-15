@@ -6,6 +6,7 @@ extends Node
 ## onu birlikte ince ayarlayacağız.
 
 signal changed(name: String)
+signal pixel_size_changed(value: float)
 
 const BASE := {
 	"sky_top": Color(0.3, 0.58, 1.0),
@@ -149,7 +150,7 @@ var fx: Node
 var roots: Array[Node] = []
 
 ## Seçili ön ayar; ayar panelinde saklanır.
-var preset_index := 0:
+var preset_index := 0:  # Retro Düz (oyuncunun seçimi)
 	set(value):
 		preset_index = posmod(value, PRESETS.size())
 		if is_inside_tree():
@@ -157,10 +158,15 @@ var preset_index := 0:
 
 
 # --- Panelden canlı ayarlanan retro değerleri (ön ayarı değiştirince sıfırlanır) ---
+## Bir retro pikselin ekranda kaç piksel olacağı. Dünya bu oranda küçük
+## bir sanal ekranda çizilip keskin büyütülür (main.gd), ekran efekti de o
+## çözünürlükte çalıştığı için shader'a 1 gönderilir.
 var pixel_size := 1.0:
 	set(v):
 		pixel_size = v
-		_post_param("pixel_size", v)
+		_post_param("pixel_size", 1.0)
+		pixel_size_changed.emit(v)
+		_apply_vertex_snap()
 var posterize := 0.0:
 	set(v):
 		posterize = v
@@ -169,11 +175,11 @@ var dither := 0.0:
 	set(v):
 		dither = v
 		_post_param("dither", v)
+## Ekran pikseli cinsinden; sanal ekran pikseline çevrilerek gönderilir.
 var vertex_snap := 0.0:
 	set(v):
 		vertex_snap = v
-		for root in roots:
-			_set_material_param(root, "vertex_snap", v)
+		_apply_vertex_snap()
 
 
 func setup(p_env: Environment, p_sun: DirectionalLight3D, p_fx: Node, p_roots: Array[Node]) -> void:
@@ -231,26 +237,43 @@ func apply() -> void:
 	changed.emit(p.name)
 
 
+func _apply_vertex_snap() -> void:
+	var v := vertex_snap / maxf(pixel_size, 1.0)
+	for root in roots:
+		_set_material_param(root, "vertex_snap", v)
+
+
 func _post_param(key: String, value: float) -> void:
 	if fx:
 		fx.mat.set_shader_parameter(key, value)
 
 
 func _set_material_param(node: Node, key: String, value: float) -> void:
-	if node is MeshInstance3D and node.material_override is ShaderMaterial:
-		node.material_override.set_shader_parameter(key, value)
+	for m in _shader_materials(node):
+		m.set_shader_parameter(key, value)
 	for child in node.get_children():
 		_set_material_param(child, key, value)
 
 
 func _apply_materials(node: Node, p: Dictionary) -> void:
-	if node is MeshInstance3D:
-		var m: Material = node.material_override
-		if m is ShaderMaterial:
-			for key in ["line_strength", "toon_bands", "toon_softness", "noise_strength", "vertex_snap"]:
-				m.set_shader_parameter(key, p[key])
+	for m in _shader_materials(node):
+		for key in ["line_strength", "toon_bands", "toon_softness", "noise_strength"]:
+			m.set_shader_parameter(key, p[key])
 	for child in node.get_children():
 		_apply_materials(child, p)
+
+
+## Bir meshin oyun shader'ı kullanan malzemeleri (tek malzeme ya da yüzey başına).
+func _shader_materials(node: Node) -> Array:
+	var out := []
+	if node is MeshInstance3D:
+		if node.material_override is ShaderMaterial:
+			out.append(node.material_override)
+		for i in node.get_surface_override_material_count():
+			var m: Material = node.get_surface_override_material(i)
+			if m is ShaderMaterial:
+				out.append(m)
+	return out
 
 
 func _merged(preset: Dictionary) -> Dictionary:
