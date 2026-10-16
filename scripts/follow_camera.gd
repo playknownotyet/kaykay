@@ -27,6 +27,20 @@ extends Camera3D
 @export var bump_stiffness := 260.0
 @export var bump_damping := 22.0
 
+@export_group("Yaya kamerası")
+## Kamera joystick'i tam saptırınca dönüş hızı (derece / sn)
+@export var foot_yaw_speed := 170.0
+@export var foot_pitch_speed := 95.0
+@export var foot_distance := 3.4
+@export var foot_look_height := 1.05
+## Varsayılan bakış açısı (yukarıdan, derece) ve sınırlar
+@export var foot_pitch_default := 16.0
+@export var foot_pitch_min := -12.0
+@export var foot_pitch_max := 62.0
+## Joystick bırakıldıktan bu kadar sonra (sn) kamera yürüyüş yönünün arkasına döner
+@export var foot_assist_delay := 1.1
+@export var foot_assist_rate := 1.6
+
 ## 0..1, hız etkilerinin ortak çarpanı (ekran efekti de bunu okur).
 var speed01 := 0.0
 
@@ -38,6 +52,14 @@ var _time := 0.0
 var _bump := 0.0        # dikey sekme (m)
 var _bump_vel := 0.0
 var _base_pos := Vector3.ZERO   # sekmesiz, yumuşatılmış kamera konumu
+var _pitch := 0.28              # yaya kamerası bakış açısı (radyan)
+var _yaw_vel := 0.0
+var _pitch_vel := 0.0
+var _idle_cam := 10.0           # kamera joystick'i ne zamandır boşta
+var _foot_dist := 3.4           # engel yüzünden kısalabilen mesafe
+var _foot_base := 3.4           # engelsiz mesafe (geçişte yumuşakça foot_distance'a gider)
+var _foot_look := 1.05          # bakış yüksekliği (geçişte yumuşak)
+var _in_foot := false
 
 
 func _ready() -> void:
@@ -72,6 +94,12 @@ func _process(delta: float) -> void:
 		return
 	_time += delta
 	var pos := target.get_global_transform_interpolated().origin
+	if target.on_foot and target.board_anim == SkateController.BoardAnim.NONE:
+		if not _in_foot:
+			_enter_foot(pos)
+		_foot_camera(delta, pos)
+		return
+	_in_foot = false
 
 	# Hız çarpanı yumuşak artar/azalır; ease ile düşük hızda az, yüksekte çok etki
 	var raw := clampf(absf(target.speed) / fast_speed, 0.0, 1.0) if target.speed > 0.0 and not target.on_foot else 0.0
@@ -117,6 +145,66 @@ func _process(delta: float) -> void:
 	look_at(_look + jitter)
 
 	fov = lerpf(fov_slow, fov_fast, s)
+
+
+## Kaykaydan inince kamera olduğu yerden devam eder (açı ve mesafe sonra yumuşakça yaya ayarına geçer)
+func _enter_foot(pos: Vector3) -> void:
+	_in_foot = true
+	_foot_look = look_height
+	var off := global_position - (pos + Vector3.UP * _foot_look)
+	var L := maxf(off.length(), 0.5)
+	_foot_dist = L
+	_foot_base = L
+	_pitch = asin(clampf(off.y / L, -0.99, 0.99))
+	_yaw = atan2(off.x, off.z)
+	_yaw_vel = 0.0
+	_pitch_vel = 0.0
+	_idle_cam = 0.0
+
+
+## Yaya: üçüncü şahıs yörünge kamerası. Joystick dönüş hızı verir (yumuşak ivmeyle), boşta
+## kalınca ve karakter yürürken kamera yavaşça arkasına geçer, bakış açısı varsayılana döner.
+## Arada duvar / ağaç varsa kamera öne çekilir.
+func _foot_camera(delta: float, pos: Vector3) -> void:
+	var stick: Vector2 = SkateInput.cam_stick
+	var want_yaw := -stick.x * deg_to_rad(foot_yaw_speed)
+	var want_pitch := -stick.y * deg_to_rad(foot_pitch_speed)
+	_yaw_vel = lerpf(_yaw_vel, want_yaw, 1.0 - exp(-14.0 * delta))
+	_pitch_vel = lerpf(_pitch_vel, want_pitch, 1.0 - exp(-14.0 * delta))
+	_yaw += _yaw_vel * delta
+	_pitch = clampf(_pitch + _pitch_vel * delta, deg_to_rad(foot_pitch_min), deg_to_rad(foot_pitch_max))
+	if stick.length() > 0.05:
+		_idle_cam = 0.0
+	else:
+		_idle_cam += delta
+	# Geçişten sonra mesafe, bakış yüksekliği ve açı yaya ayarına süzülür
+	_foot_base = lerpf(_foot_base, foot_distance, 1.0 - exp(-1.5 * delta))
+	_foot_look = lerpf(_foot_look, foot_look_height, 1.0 - exp(-2.0 * delta))
+	if _idle_cam > foot_assist_delay:
+		_pitch = lerp_angle(_pitch, deg_to_rad(foot_pitch_default), 1.0 - exp(-0.6 * delta))
+		var moving := clampf(target.speed / 1.5, 0.0, 1.0)
+		# Kameraya doğru yürürken arkaya dönmez (yön kameraya göre; dönerse hareket karışır)
+		var away := clampf(_yaw_dir().dot(target.heading) + 0.3, 0.0, 1.0)
+		_yaw = lerp_angle(_yaw, _heading_yaw(), 1.0 - exp(-foot_assist_rate * moving * away * delta))
+		_pitch = lerp_angle(_pitch, deg_to_rad(foot_pitch_default), 1.0 - exp(-0.8 * moving * delta))
+
+	var look := pos + Vector3.UP * _foot_look
+	var back := Vector3(sin(_yaw) * cos(_pitch), sin(_pitch), cos(_yaw) * cos(_pitch))
+	# Engel: bakış noktasından kameraya ışın; çarparsa önüne
+	var dist := _foot_base
+	var q := PhysicsRayQueryParameters3D.create(look, look + back * (_foot_base + 0.3), 0xFFFFFFFF, [target.get_rid()])
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if not hit.is_empty():
+		dist = maxf(look.distance_to(hit.position) - 0.3, 0.6)
+	# İçeri hızlı, dışarı yavaş (duvar kenarında titremesin)
+	_foot_dist = lerpf(_foot_dist, dist, 1.0 - exp(-(25.0 if dist < _foot_dist else 3.0) * delta))
+	var cam := look + back * _foot_dist
+	_base_pos = cam
+	global_position = cam
+	_look = look
+	look_at(look)
+	speed01 = lerpf(speed01, 0.0, 1.0 - exp(-2.5 * delta))
+	fov = lerpf(fov, fov_slow, 1.0 - exp(-4.0 * delta))
 
 
 func _heading_yaw() -> float:

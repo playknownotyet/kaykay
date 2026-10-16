@@ -1,0 +1,114 @@
+{
+ "avenues": {
+  "list": [
+   {
+    "a": 32,
+    "b": 0
+   },
+   {
+    "a": 92,
+    "b": 0.15
+   },
+   {
+    "a": 158,
+    "b": 0
+   },
+   {
+    "a": 212,
+    "b": -0.12
+   },
+   {
+    "a": 268,
+    "b": 0.1
+   },
+   {
+    "a": 322,
+    "b": 0
+   },
+   {
+    "a": 355,
+    "b": 0
+   },
+   {
+    "a": 125,
+    "b": 0
+   },
+   {
+    "a": 60,
+    "b": 0
+   }
+  ],
+  "width": 11
+ },
+ "build": {
+  "curb": 0.15,
+  "fillet": 9,
+  "maxGrade": 9,
+  "sidewalk": 3
+ },
+ "coast": [
+  0.95,
+  0.87,
+  0.9,
+  0.8,
+  0.76,
+  0.94,
+  1,
+  1,
+  0.96,
+  0.97,
+  0.88,
+  0.88
+ ],
+ "harbor": {
+  "angle": -14,
+  "depth": 48,
+  "pierLen": 46,
+  "piers": 2,
+  "width": 13
+ },
+ "hill": {
+  "etek": true,
+  "foot": 11,
+  "height": 94,
+  "radius": 255,
+  "steep": 1.15,
+  "x": -215,
+  "y": 135
+ },
+ "inner": {
+  "count": 2,
+  "r1": 120,
+  "r2": 235,
+  "width": 8
+ },
+ "plaza": {
+  "r": 26,
+  "ringW": 10,
+  "x": 195,
+  "y": -10
+ },
+ "ring": {
+  "inset": 26,
+  "width": 12
+ },
+ "rough": 0.5,
+ "seed": 7,
+ "serp": {
+  "dir": -20,
+  "grade": 6.5,
+  "hairpin": 10,
+  "spread": 70,
+  "width": 8
+ },
+ "size": 950,
+ "terrain": {
+  "base": 4,
+  "beach": 22,
+  "roll": 2.5
+ },
+ "view": {
+  "contours": true,
+  "gradeColors": true
+ }
+}

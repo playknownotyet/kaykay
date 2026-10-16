@@ -39,6 +39,9 @@ var gyro_use_y := false
 var steer_target := 0.0          # -1 sol, +1 sağ
 var steer_is_digital := false    # klavyede yumuşak rampa uygulanır
 var move_vector := Vector2.ZERO  # joystick (x sağ, y ileri); yürüme için de kullanılacak
+## Yayayken kamera joystick'i (x sağa dön, y yukarı bak), ölü bölge ve eğri uygulanmış
+var cam_stick := Vector2.ZERO
+var _cam_raw := Vector2.ZERO
 var gesture: int = Gesture.NONE
 var push_progress := 0.0         # 0..1 itme vuruşunun neresindeyiz (ayak animasyonu)
 var foot_contact := false        # ayak şu an yere basıp itiyor mu
@@ -51,6 +54,7 @@ var on_foot := false             # yürürken ayak hareketleri ve klavye itme ka
 
 var _ollie_requested := false
 var _board_toggle_requested := false
+var _skitch_requested := false
 var _finger_hps := 0.0           # parmak hızı, ekran yüksekliği/sn (itme yönünde +)
 var _last_finger_update := 0.0
 var _joystick := Vector2.ZERO
@@ -132,6 +136,21 @@ func consume_board_toggle() -> bool:
 	return r
 
 
+func set_cam_stick(v: Vector2) -> void:
+	_cam_raw = v.limit_length(1.0)
+
+
+## Arabanın arkasına tutun / bırak
+func request_skitch() -> void:
+	_skitch_requested = true
+
+
+func consume_skitch() -> bool:
+	var r := _skitch_requested
+	_skitch_requested = false
+	return r
+
+
 func set_on_foot(value: bool) -> void:
 	on_foot = value
 	touch_gesture_end()
@@ -162,6 +181,15 @@ func _process(delta: float) -> void:
 		var m := pow((mag - joystick_deadzone) / (1.0 - joystick_deadzone), joystick_curve)
 		j = j / mag * m
 	move_vector = j
+	# Kamera joystick'i: küçük ölü bölge, ince ayar için kuvvetli eğri (ucunda hızlı döner)
+	var c := _cam_raw
+	var cm := c.length()
+	cam_stick = Vector2.ZERO if cm < 0.08 else c / cm * pow((cm - 0.08) / 0.92, 1.7)
+	var kc := Vector2(
+		float(Input.is_physical_key_pressed(KEY_L)) - float(Input.is_physical_key_pressed(KEY_J)),
+		float(Input.is_physical_key_pressed(KEY_I)) - float(Input.is_physical_key_pressed(KEY_K)))
+	if kc != Vector2.ZERO:
+		cam_stick = kc * 0.8
 	if on_foot:
 		# Yürürken klavye: W A S D / oklar
 		var kb := Vector2(
@@ -195,6 +223,8 @@ func _input(event: InputEvent) -> void:
 			request_ollie()
 		elif event.physical_keycode == KEY_E:
 			request_board_toggle()
+		elif event.physical_keycode == KEY_Q:
+			request_skitch()
 
 
 func _update_keyboard(delta: float) -> void:

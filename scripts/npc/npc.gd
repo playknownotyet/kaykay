@@ -30,7 +30,10 @@ var state: int = State.IDLE
 var velocity := Vector3.ZERO
 var path: PackedVector3Array = PackedVector3Array()
 var path_index := 0
+var path_ids := PackedInt64Array()    # yaya ağı düğümleri (yaya geçidi kenarlarını tanımak için)
+var cross_index := -1                 # karşıya geçişi onaylanan yol parçası
 var far := false                      # kameradan uzak: gizli, animasyon durur
+var ground_exclude: Array[RID] = []   # zemin ışınının yok sayacağı gövdeler (oyuncu)
 
 var _model: Node3D
 var _anim: AnimationPlayer
@@ -39,6 +42,7 @@ var _yaw := 0.0
 var _anim_speed := 1.0                 # modelin 1x yürüyüşündeki hız (boy ölçeğiyle)
 var _springs: SpringBoneSimulator3D    # kulak / kuyruk / hortum yaylanması
 var _buzz: WingBuzz                    # sinek kanatlarının vızıldaması
+var _ground_snap := true               # görünür olunca zemine bir anda otur
 
 
 ## materials: renk -> paylaşılan malzeme önbelleği (çizim çağrısı ve bellek için)
@@ -46,12 +50,8 @@ func setup(p_recipe: Dictionary, materials: Dictionary) -> void:
 	recipe = p_recipe
 	speed = recipe.speed
 	_anim_speed = recipe.anim_speed
-	_model = MODELS[recipe.species].instantiate()
-	_model.rotation_degrees.y = 180.0   # Blender'da -Y'ye bakıyor
-	_model.scale = recipe.scale
+	_model = build_model(recipe, materials)
 	add_child(_model)
-	_keep_parts(_model, recipe.parts)
-	_paint(_model, recipe.colors, materials)
 	_anim = _model.find_child("AnimationPlayer", true, false)
 	for n in ["walk", "idle", "idle_look"]:
 		_anim.get_animation(n).loop_mode = Animation.LOOP_LINEAR
@@ -85,8 +85,18 @@ func _setup_springs(springs: Array) -> void:
 	skel.add_child(_springs)
 
 
+## Tarife göre giydirilmiş ve boyanmış model (yayalar ve araba sürücüleri kullanır).
+static func build_model(recipe: Dictionary, materials: Dictionary) -> Node3D:
+	var model: Node3D = MODELS[recipe.species].instantiate()
+	model.rotation_degrees.y = 180.0   # Blender'da -Y'ye bakıyor
+	model.scale = recipe.scale
+	_keep_parts(model, recipe.parts)
+	_paint(model, recipe.colors, materials)
+	return model
+
+
 ## Seçilmeyen parçaları sil (gizli parçalar da işlemci harcar).
-func _keep_parts(node: Node, keep: Array) -> void:
+static func _keep_parts(node: Node, keep: Array) -> void:
 	for child in node.get_children():
 		if child is MeshInstance3D:
 			if not keep.has(String(child.name)):
@@ -95,7 +105,7 @@ func _keep_parts(node: Node, keep: Array) -> void:
 			_keep_parts(child, keep)
 
 
-func _paint(node: Node, colors: Dictionary, materials: Dictionary) -> void:
+static func _paint(node: Node, colors: Dictionary, materials: Dictionary) -> void:
 	if node is MeshInstance3D and not node.is_queued_for_deletion():
 		var mesh: Mesh = node.mesh
 		for i in mesh.get_surface_count():
@@ -115,9 +125,11 @@ func _paint(node: Node, colors: Dictionary, materials: Dictionary) -> void:
 
 # ---------- Davranış (NpcCrowd her fizik karesinde çağırır) ----------
 
-func set_path(p: PackedVector3Array) -> void:
+func set_path(p: PackedVector3Array, ids := PackedInt64Array()) -> void:
 	path = p
+	path_ids = ids
 	path_index = 0
+	cross_index = -1
 	_set_state(State.WALK)
 
 
@@ -172,9 +184,7 @@ func tick(delta: float, steer: Vector3) -> void:
 	else:
 		velocity = velocity.move_toward(steer, 4.0 * delta)
 	global_position += velocity * delta
-	# Zemin yüksekliği yol noktalarından (düz meydan; arnavut kaldırımı 1 cm)
-	if path_index < path.size():
-		global_position.y = lerpf(global_position.y, path[path_index].y, 1.0 - exp(-8.0 * delta))
+	_follow_ground(delta)
 
 	var v := Vector3(velocity.x, 0.0, velocity.z)
 	if state != State.STUMBLE and v.length() > 0.15:
@@ -189,6 +199,25 @@ func tick(delta: float, steer: Vector3) -> void:
 	elif state != State.STUMBLE:
 		_play(_idle_anim)
 		_anim.speed_scale = 1.0
+
+
+## Ayaklar zeminde: görünürken aşağı ışınla gerçek yüzeyi bul (yol noktaları seyrek,
+## aradaki tepe/çukur yüzünden NPC havada ya da yerin altında kalmasın).
+## Uzaktayken (gizli) ucuz yol: sıradaki yol noktasının yüksekliği.
+func _follow_ground(delta: float) -> void:
+	if not far:
+		var p := global_position
+		var q := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 2.5, p + Vector3.DOWN * 6.0, 0xFFFFFFFF, ground_exclude)
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if not hit.is_empty():
+			if _ground_snap:
+				global_position.y = hit.position.y
+				_ground_snap = false
+			else:
+				global_position.y = lerpf(p.y, hit.position.y, 1.0 - exp(-20.0 * delta))
+			return
+	if path_index < path.size():
+		global_position.y = lerpf(global_position.y, path[path_index].y, 1.0 - exp(-8.0 * delta))
 
 
 func stumble_done() -> bool:
@@ -221,6 +250,7 @@ func set_far(value: bool) -> void:
 	if value == far:
 		return
 	far = value
+	_ground_snap = true
 	visible = not value
 	_anim.active = not value
 	if _springs:

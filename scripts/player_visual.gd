@@ -14,8 +14,8 @@ extends Node3D
 
 const MODEL := preload("res://assets/karakter/karakter.glb")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
-const STATES := ["ride", "push", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount"]
-const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "brake", "air", "grind", "walk", "run", "stand_idle"]
+const STATES := ["ride", "push", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount", "dus", "tutun", "yaya_hava", "yaya_dus"]
+const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "brake", "air", "grind", "walk", "run", "stand_idle", "tutun", "yaya_hava"]
 ## Ollie animasyonunda fiziksel sıçramanın olduğu an (karakter_rig.py OLLIE_POP_FRAME / 30)
 const OLLIE_POP_TIME := 0.1
 
@@ -78,6 +78,15 @@ func _ready() -> void:
 			_land_timer = 0.18)
 	controller.ollied.connect(_on_ollied)
 	controller.stumbled.connect(_on_stumbled)
+	controller.knocked_down.connect(func():
+		# Sarsılma üstüne binmiş olabilir: kesilir, yalnız düşme oynar
+		_tree.set("parameters/sarsil_shot/request", AnimationNodeOneShot.ONE_SHOT_REQUEST_ABORT)
+		_special = ""
+		_state = ""
+		var fall := "yaya_dus" if controller.fall_on_foot else "dus"
+		_set_state(fall)
+		_tree.set("parameters/%s_seek/seek_request" % fall, 0.0)
+		_kick_arms(Vector2(-1.2, 1.6)))
 	controller.ollie_started.connect(func(): _start_special("ollie", 0.0))
 	controller.double_jumped.connect(func():
 		_start_special("flip", 0.0)
@@ -128,7 +137,7 @@ func _align(delta: float) -> void:
 			target = target * Basis(Vector3.UP, PI * 0.5)
 		# Rayda denge: hafif sağa sola salınım
 		lean_target = sin(_time * 5.0) * 0.07 + sin(_time * 8.3) * 0.03
-	elif controller.on_foot or controller.board_anim != SkateController.BoardAnim.NONE:
+	elif controller.on_foot or controller.board_anim != SkateController.BoardAnim.NONE or controller.fall_time > 0.0:
 		lean_target = 0.0
 	else:
 		# Dönüşe doğru eğil (hızla artar)
@@ -196,13 +205,13 @@ func _setup_animation() -> void:
 		bt.connect_node("state", STATES.find(st), st + "_scale")
 
 	# Zıplamalar: bir noktadan başlatılabilir (rampadan / raydan çıkışta "pat" anından)
-	for st in ["ollie", "flip"]:
+	for st in ["ollie", "flip", "dus", "yaya_dus"]:
 		bt.add_node(st + "_anim", anim.call(st))
 		bt.add_node(st + "_seek", AnimationNodeTimeSeek.new())
 		bt.connect_node(st + "_seek", 0, st + "_anim")
 		bt.connect_node("state", STATES.find(st), st + "_seek")
 
-	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount"]:
+	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount", "tutun", "yaya_hava"]:
 		bt.add_node(st, anim.call(st))
 		bt.connect_node("state", STATES.find(st), st)
 
@@ -238,13 +247,19 @@ func _update_animation() -> void:
 	var st := "ride"
 	var push_t := -1.0
 
-	if controller.board_anim == SkateController.BoardAnim.MOUNTING:
+	if controller.fall_time > 0.0:
+		st = "yaya_dus" if controller.fall_on_foot else "dus"
+	elif controller.skitch_car:
+		st = "tutun"
+	elif controller.board_anim == SkateController.BoardAnim.MOUNTING:
 		st = "mount"
 	elif controller.board_anim == SkateController.BoardAnim.DISMOUNTING:
 		st = "dismount"
 	elif controller.on_foot:
 		var v := controller.speed
-		if v > 2.6:
+		if not controller.grounded and _air_t > 0.06:
+			st = "yaya_hava"
+		elif v > 2.6:
 			st = "run"
 			_tree.set("parameters/run_scale/scale", clampf(v / run_anim_speed, 0.6, 2.5))
 		elif v > 0.15:

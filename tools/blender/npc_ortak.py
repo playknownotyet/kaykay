@@ -1668,6 +1668,37 @@ def standard_actions(A, style=None, secondary=None):
         sec(pose, "stumble", f / 36.0, f)
         A.key(f, pose)
 
+    # --- Araba sürme: oturmuş (kalça diz yüksekliğinde, uyluklar yatay), eller direksiyonda;
+    #     direksiyon hafifçe sağa sola, kafa yola bakıp ara sıra yana döner. Godot'ta kalça
+    #     kemiği koltuğa oturtulur. ---
+    A.action("drive")
+    thigh = B.hip_z - B.knee_z
+    drop = thigh * 0.97
+    sz = B.shoulder_z - drop
+    reach = (B.arm[0] + B.arm[1]) * 0.955
+    wheel_y = -min(reach * 0.62, 0.42)
+    wheel_z = sz - min(reach * 0.35, 0.22)
+    wheel_r = max(min(B.shoulder_w * 0.85, 0.17), 0.1)
+    n = 120
+    for f in range(0, n + 1, 6):
+        ph = math.tau * f / n
+        turn = math.radians(14) * math.sin(ph) + math.radians(5) * math.sin(3 * ph)
+        look = 22 * max(0.0, math.sin(2 * ph - 1.0)) ** 3
+        pose = A.stand(hips=(0, 0.02, -drop))
+        A.add_rot(pose, "spine", (-6, 0, 0))
+        A.add_rot(pose, "chest", (-2, 0, 0))
+        A.spread_neck(pose, (8, look, 0), 0.5)
+        for sfx, side in (("L", 1), ("R", -1)):
+            hp, kn, an, _ = B.leg_points(side)
+            pose[f"foot.{sfx}"] = (hp.x * 1.1, -thigh - 0.04, 0.085)
+            pose[f"knee.{sfx}"] = (hp.x * 1.4, -thigh - 0.8, B.knee_z + 0.6)
+            a = turn + (0 if side > 0 else math.pi)
+            pose[f"hand.{sfx}"] = (math.cos(a) * wheel_r, wheel_y, wheel_z + math.sin(a) * wheel_r)
+            pose[f"elbow.{sfx}"] = ((B.shoulder_w + 0.12) * side, 0.35, sz - 0.45)
+            pose[f"hand_rot.{sfx}"] = (-70, 0, -20 * side)
+        sec(pose, "idle", ph, f)
+        A.key(f, pose)
+
 
 def walk_speed(style):
     S = dict(DEFAULT_STYLE)

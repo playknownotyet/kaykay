@@ -5,6 +5,7 @@ extends Node
 
 func _ready() -> void:
 	var main: Node = load("res://scenes/main.tscn").instantiate()
+	main.use_island = false   # kol testi düz zeminde
 	add_child(main)
 	var vis: Node3D = main.player.get_node("Visual")
 	for i in 20:

@@ -16,6 +16,8 @@ signal stumbled                     # sert çarpma: karakter sarsılır, ayağı
 signal grind_started
 signal grind_ended
 signal mode_changed(on_foot: bool)
+signal knocked_down                 # araba çarptı: düşer, kalkar, kendiliğinden kaykaya biner
+signal skitch_changed(on: bool)     # arabanın arkasına tutundu / bıraktı
 
 # --- Ayar panelinden değiştirilebilen değerler ---
 @export var gravity := 14.5
@@ -60,6 +62,9 @@ signal mode_changed(on_foot: bool)
 @export var run_speed := 4.0
 @export var walk_accel := 10.0
 @export var walk_turn_rate := 10.0
+## Yayayken zıplama hızı (m/sn): 4.4 -> ~0,67 m
+@export var foot_jump_speed := 4.4
+signal foot_jumped
 
 # Binme / inme animasyonlarıyla aynı süre ve hız (tools/blender/karakter_rig.py)
 const MOUNT_TIME := 0.5
@@ -102,6 +107,15 @@ const STUMBLE_TIME := 0.8
 const STUMBLE_FOOT_DOWN := Vector2(0.2, 0.52)
 var board_anim: int = BoardAnim.NONE  # binme / inme sürüyor mu
 var board_anim_time := 0.0
+## > 0: araba çarpmış, yerde (animasyon "dus", 66 kare). Bu sürede kontrol yok.
+var fall_time := 0.0
+const FALL_TIME := 2.2
+## Yayayken çarpılınca: kaykay elde düşer, kalkıp yaya devam eder ("yaya_dus", 45 kare)
+const FOOT_FALL_TIME := 1.5
+var fall_on_foot := false
+## Tutunma: trafik yöneticisi yakındaki uygun arabayı yazar; tutununca skitch_car olur
+var skitch_candidate: Araba = null
+var skitch_car: Araba = null
 
 var _coyote := 0.0
 var _ollie_buffer := 0.0
@@ -141,6 +155,8 @@ func _ready() -> void:
 
 func respawn() -> void:
 	cancel_grind()
+	_end_skitch(false)
+	fall_time = 0.0
 	board_anim = BoardAnim.NONE
 	if on_foot:
 		on_foot = false
@@ -169,8 +185,24 @@ func _physics_process(delta: float) -> void:
 		if t > STUMBLE_FOOT_DOWN.x and t < STUMBLE_FOOT_DOWN.y and grounded:
 			speed = move_toward(speed, 0.0, stumble_brake * delta)
 
+	if fall_time > 0.0:
+		inp.consume_board_toggle()
+		inp.consume_skitch()
+		_ollie_buffer = 0.0
+		_fall_move(delta)
+		return
+
+	if inp.consume_skitch():
+		toggle_skitch()
+
 	if inp.consume_board_toggle():
+		if skitch_car:
+			_end_skitch(false)
 		toggle_board()
+
+	if skitch_car:
+		_skitch_move(delta)
+		return
 
 	if board_anim != BoardAnim.NONE:
 		_ollie_buffer = 0.0
@@ -178,8 +210,8 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if on_foot:
-		_ollie_buffer = 0.0
 		_foot_move(delta)
+		_ollie_buffer = 0.0
 		return
 
 	if grinding:
@@ -201,7 +233,7 @@ func _physics_process(delta: float) -> void:
 	if not grounded:
 		_try_latch()
 
-	if global_position.y < -10.0:
+	if global_position.y < -1.5:   # denize düştü (ada kıyısı, iskele)
 		respawn()
 
 
@@ -366,7 +398,16 @@ func _handle_walls() -> void:
 	var worst_into := 0.0
 	var wall_dot := cos(floor_max_angle)
 	for i in get_slide_collision_count():
-		var n := get_slide_collision(i).get_normal()
+		var col := get_slide_collision(i)
+		var n := col.get_normal()
+		# Arabaya çarpma (oyuncu sürerken ya da araba üstüne gelirken): sarsılma değil düşme
+		var car := col.get_collider() as Araba
+		if car and n.y < wall_dot:
+			var nh := Vector3(n.x, 0.0, n.z).normalized()
+			var rel := maxf(-velocity.dot(nh), 0.0) + maxf(car.speed * car.fwd.dot(nh), 0.0)
+			if rel >= stumble_creature_kmh / 3.6:
+				knockdown(nh * (rel * 0.5 + 1.0) + car.fwd * car.speed * 0.6)
+				return
 		if n.y >= wall_dot or n.y < -0.5:
 			continue
 		var nh := Vector3(n.x, 0.0, n.z).normalized()
@@ -463,16 +504,31 @@ func _foot_move(delta: float) -> void:
 
 	velocity.x = hv.x
 	velocity.z = hv.z
-	velocity.y = -0.5 if is_on_floor() else velocity.y - gravity * delta
+	if _ollie_buffer > 0.0 and (is_on_floor() or _coyote > 0.0):
+		_ollie_buffer = 0.0
+		_coyote = 0.0
+		velocity.y = foot_jump_speed
+		floor_snap_length = 0.0
+		foot_jumped.emit()
+	elif is_on_floor() and velocity.y <= 0.0:
+		velocity.y = -0.5
+	else:
+		velocity.y -= gravity * delta
 	speed = hv.length()
 	forward_on_ground = heading
 	ground_normal = Vector3.UP
-	floor_snap_length = floor_snap
+	if velocity.y <= 0.0:
+		floor_snap_length = floor_snap
+	var was := grounded
 	move_and_slide()
 	grounded = is_on_floor()
+	if was and not grounded and velocity.y <= 0.0:
+		_coyote = COYOTE_TIME     # kenardan düştü: kısa süre yine zıplanabilir
+	if grounded and not was:
+		landed.emit(0.0)
 	_update_floor_surface()
 	SkateInput.board_speed = 0.0
-	if global_position.y < -10.0:
+	if global_position.y < -1.5:   # denize düştü (ada kıyısı, iskele)
 		respawn()
 
 
@@ -552,11 +608,36 @@ func _grind_move(delta: float) -> void:
 
 	if _ollie_buffer > 0.0:
 		_exit_grind(true)
-	elif _rail_pos <= 0.0 or _rail_pos >= _rail.length or speed < 0.3:
+	elif speed < 0.3 or ((_rail_pos <= 0.0 or _rail_pos >= _rail.length) and not _continue_rail()):
 		_exit_grind(false)
 
-	if global_position.y < -10.0:
+	if global_position.y < -1.5:   # denize düştü (ada kıyısı, iskele)
 		respawn()
+
+
+## Ray ucunda, ucu ucuna eklenmiş bir sonraki parça varsa (eğri bariyer, uzun kenar)
+## zıplamadan ona geç: grind kesintisiz sürer.
+func _continue_rail() -> bool:
+	var end := _rail.b if _rail_sign > 0.0 else _rail.a
+	var d := _rail.direction * _rail_sign
+	var over := _rail_pos - _rail.length if _rail_sign > 0.0 else -_rail_pos
+	for node in get_tree().get_nodes_in_group("grind_rails"):
+		var r := node as GrindRail
+		if r == _rail:
+			continue
+		var sg := 0.0
+		if r.a.distance_squared_to(end) < 0.01:
+			sg = 1.0
+		elif r.b.distance_squared_to(end) < 0.01:
+			sg = -1.0
+		if sg == 0.0 or (r.direction * sg).dot(d) < 0.8:
+			continue
+		_rail = r
+		_rail_sign = sg
+		_rail_pos = over if sg > 0.0 else r.length - over
+		_snap_offset = global_position - r.point_at(clampf(_rail_pos, 0.0, r.length))
+		return true
+	return false
 
 
 func _exit_grind(jump: bool) -> void:
@@ -601,6 +682,99 @@ func shake() -> void:
 		return
 	stumble_time = STUMBLE_TIME
 	stumbled.emit()
+
+
+# ---------- Araba: düşme ve tutunma ----------
+
+## Araba çarptı: oyuncu savrulur, düşer, kalkar ve kendiliğinden kaykaya biner.
+func knockdown(push: Vector3) -> void:
+	if fall_time > 0.0:
+		return
+	cancel_grind()
+	_end_skitch(false)
+	if board_anim == BoardAnim.DISMOUNTING:
+		on_foot = true      # inerken çarpıldı: yaya düşer
+		mode_changed.emit(true)
+	elif board_anim == BoardAnim.MOUNTING:
+		on_foot = false
+		SkateInput.set_on_foot(false)
+		mode_changed.emit(false)
+	board_anim = BoardAnim.NONE
+	stumble_time = 0.0
+	fall_on_foot = on_foot
+	fall_time = FOOT_FALL_TIME if on_foot else FALL_TIME
+	speed = 0.0
+	velocity = Vector3(push.x, 0.0, push.z).limit_length(8.0) + Vector3.UP * 2.2
+	grounded = false
+	knocked_down.emit()
+
+
+func _fall_move(delta: float) -> void:
+	fall_time = maxf(fall_time - delta, 0.0)
+	var hv := Vector3(velocity.x, 0.0, velocity.z).move_toward(Vector3.ZERO, (5.0 if is_on_floor() else 1.0) * delta)
+	velocity.x = hv.x
+	velocity.z = hv.z
+	velocity.y = -0.5 if is_on_floor() and velocity.y <= 0.0 else velocity.y - gravity * delta
+	speed = 0.0
+	forward_on_ground = heading
+	ground_normal = Vector3.UP
+	floor_snap_length = floor_snap
+	move_and_slide()
+	grounded = is_on_floor()
+	SkateInput.board_speed = 0.0
+	if global_position.y < -1.5:
+		fall_time = 0.0
+		respawn()
+
+
+## Tutun / bırak (buton ya da Q).
+func toggle_skitch() -> void:
+	if skitch_car:
+		_end_skitch(false)
+	elif skitch_candidate and is_instance_valid(skitch_candidate) and not on_foot and grounded 			and board_anim == BoardAnim.NONE and not grinding:
+		skitch_car = skitch_candidate
+		skitch_changed.emit(true)
+
+
+func _end_skitch(jump: bool) -> void:
+	if not skitch_car:
+		return
+	if is_instance_valid(skitch_car):
+		heading = Vector3(skitch_car.fwd.x, 0.0, skitch_car.fwd.z).normalized()
+		speed = minf(skitch_car.speed + 0.4, max_speed)
+	skitch_car = null
+	skitch_changed.emit(false)
+	if jump:
+		_ollie_buffer = OLLIE_BUFFER_TIME
+
+
+## Arabanın arkasında çekiliş: kök tutunma noktasına yay gibi çekilir, hız ve yön arabanın.
+func _skitch_move(delta: float) -> void:
+	if not is_instance_valid(skitch_car) or not skitch_car.visible:
+		_end_skitch(false)
+		return
+	if _ollie_buffer > 0.0:
+		_ollie_buffer = 0.0
+		_end_skitch(true)
+		return
+	var target: Vector3 = skitch_car.skitch_anchor()
+	var to := target - global_position
+	if Vector2(to.x, to.z).length() > 2.6:
+		_end_skitch(false)   # araba çok sert döndü / bir şeye takıldık
+		return
+	var f: Vector3 = skitch_car.fwd
+	heading = Vector3(f.x, 0.0, f.z).normalized()
+	speed = skitch_car.speed
+	var n := get_floor_normal() if is_on_floor() else Vector3.UP
+	ground_normal = n
+	forward_on_ground = _project_on_plane(heading, n)
+	var pull := Vector3(to.x, 0.0, to.z) * 8.0
+	velocity = forward_on_ground * speed + pull - n * ground_stick
+	floor_snap_length = floor_snap
+	move_and_slide()
+	grounded = is_on_floor()
+	_update_floor_surface()
+	SkateInput.board_speed = speed
 
 
 ## Grind'i hemen bırakır (ışınlanma / yeniden doğma için).

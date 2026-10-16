@@ -784,6 +784,134 @@ def make_actions(arm_obj):
             pose["hand_rot.R"] = (-20, 0, -35)
         key_pose(arm_obj, f, pose)
 
+    # --- Düşme: araba çarptı. Gövde geriye savrulur, ayaklar kaykaydan kopar, kaykayın
+    #     arkasına poposunun üstüne düşer (eller geride yere dayanır), kafasını silker,
+    #     kalkar, kaykaya adım atıp yeniden biner. Kaykay yerinde kalır (oyunda karakterin
+    #     kökü kaykaydır). DUS_FRAMES / 30 sn; Godot'taki FALL_TIME ile aynı. ---
+    act("dus")
+    hz = REST["hips"].z
+    sit = 0.13 - hz                       # oturuşta kalça yerden 13 cm; ayaklar kaykayın üstünde
+    fall_keys = [
+        # kare, kalça (dx, dy, dz mutlak delta), gövde, kafa, sol el, sağ el, sol ayak, sağ ayak, diz yukarı
+        (0, (0.0, 0.02, D - 0.05), (6, 0, 0), (0, 0, 0),
+         (0.215, -0.02, 0.65 + D), (-0.215, -0.02, 0.65 + D), LEFT_ON_BOARD, RIGHT_ON_BOARD, False),
+        (3, (0.02, 0.1, D - 0.02), (-26, 6, 8), (-20, 0, 0),
+         (0.42, 0.02, 1.0), (-0.4, 0.0, 1.02), (0.06, 0.1, D + 0.2), (-0.06, -0.2, D + 0.24), False),
+        (7, (0.04, 0.32, -0.25), (-34, 8, 10), (-26, 10, 0),
+         (0.46, 0.2, 0.8), (-0.44, 0.18, 0.84), (0.12, -0.05, 0.42), (-0.1, -0.22, 0.48), True),
+        (11, (0.05, 0.5, sit), (-22, 4, 4), (10, 0, 0),
+         (0.27, 0.78, 0.06), (-0.27, 0.78, 0.06), (0.07, 0.06, D + 0.075), (-0.07, -0.04, D + 0.075), True),
+        (14, (0.05, 0.5, sit + 0.04), (-16, 0, 0), (6, 0, 0),
+         (0.27, 0.78, 0.06), (-0.27, 0.78, 0.06), (0.07, 0.06, D + 0.075), (-0.07, -0.04, D + 0.075), True),
+        (17, (0.05, 0.5, sit), (-18, 0, 0), (2, 0, 0),
+         (0.27, 0.78, 0.06), (-0.27, 0.78, 0.06), (0.07, 0.06, D + 0.075), (-0.07, -0.04, D + 0.075), True),
+        # kafa silkme (sağ el kafada)
+        (22, (0.05, 0.5, sit), (-10, -6, 0), (8, -10, 16),
+         (0.27, 0.78, 0.06), (-0.14, 0.38, 0.82), (0.07, 0.06, D + 0.075), (-0.07, -0.04, D + 0.075), True),
+        (27, (0.05, 0.5, sit), (-10, 6, 0), (8, 12, -16),
+         (0.27, 0.78, 0.06), (-0.14, 0.38, 0.82), (0.07, 0.06, D + 0.075), (-0.07, -0.04, D + 0.075), True),
+        (32, (0.05, 0.5, sit), (-12, 0, 0), (4, 0, 8),
+         (0.27, 0.78, 0.06), (-0.27, 0.74, 0.06), (0.07, 0.06, D + 0.075), (-0.07, -0.04, D + 0.075), True),
+        # kalkış: öne eğil, ayaklar altına, eller dizlerde
+        (38, (0.03, 0.42, sit + 0.12), (30, 0, 0), (-10, 0, 0),
+         (0.2, 0.2, 0.3), (-0.2, 0.2, 0.3), (0.13, 0.42, 0.075), (-0.13, 0.4, 0.075), True),
+        (44, (0.0, 0.44, -0.2), (34, 0, 0), (-16, 0, 0),
+         (0.17, 0.3, 0.42), (-0.17, 0.3, 0.42), (0.12, 0.46, 0.075), (-0.12, 0.44, 0.075), False),
+        (50, (0.0, 0.44, -0.03), (8, 0, 0), (0, 0, 0),
+         (0.25, 0.44, 0.63), (-0.25, 0.44, 0.63), (0.11, 0.45, 0.075), (-0.11, 0.45, 0.075), False),
+        # sağ ayak kaykaya, sonra sol ayak; gövde öne geçer
+        (55, (0.0, 0.25, D - 0.04), (10, 0, 0), (0, 0, 0),
+         (0.26, 0.2, 0.7), (-0.26, 0.2, 0.7), (0.11, 0.45, 0.075), (RIGHT_ON_BOARD[0], RIGHT_ON_BOARD[1], RIGHT_ON_BOARD[2] + 0.06), False),
+        (60, (0.0, 0.08, D - 0.02), (8, 0, 0), (0, 0, 0),
+         (0.24, 0.0, 0.7 + D), (-0.24, 0.0, 0.7 + D), (0.06, 0.25, D + 0.16), RIGHT_ON_BOARD, False),
+        (66, (0.0, 0.02, D - 0.05), (6, 0, 0), (0, 0, 0),
+         (0.215, -0.02, 0.65 + D), (-0.215, -0.02, 0.65 + D), LEFT_ON_BOARD, RIGHT_ON_BOARD, False),
+    ]
+    for f, hips, spine, head, hl, hr, fl, fr, knees_up in fall_keys:
+        pose = ride_base(crouch=0.05, hips=hips, spine_rot=spine, head_rot=head,
+                         chest_rot=(spine[0] * 0.3, spine[1] * 0.5, spine[2] * 0.4))
+        pose["hand.L"], pose["hand.R"] = hl, hr
+        pose["foot.L"], pose["foot.R"] = fl, fr
+        if knees_up:
+            pose["knee.L"] = (0.2, -0.9, 0.75)
+            pose["knee.R"] = (-0.2, -0.9, 0.75)
+        if hl[2] < 0.2 or hl[2] > 0.9:
+            pose.update(RAISED_ELBOWS)
+        if hl[2] < 0.2:
+            pose["elbow.L"] = (0.4, 0.4, 0.5)
+            pose["elbow.R"] = (-0.4, 0.4, 0.5)
+            pose["hand_rot.L"] = (40, 0, 10)
+            pose["hand_rot.R"] = (40, 0, -10)
+        key_pose(arm_obj, f, pose)
+
+    # --- Yayayken havada (zıplama): dizler toplanır, serbest kol yukarı, kaykay sağ elde ---
+    act("yaya_hava")
+    for f, k in ((0, 0.0), (10, 1.0), (20, 0.0)):
+        pose = stand_pose(hips=(0, 0.0, -0.04 - 0.01 * k), spine_rot=(10, 0, 0), head_rot=(-6, 0, 0))
+        pose["foot.L"] = (0.12, -0.04, 0.24 + 0.02 * k)
+        pose["foot.R"] = (-0.12, 0.06, 0.2 + 0.02 * k)
+        pose["foot_rot.L"] = (-20, 0, 0)
+        pose["foot_rot.R"] = (-10, 0, 0)
+        pose["knee.L"] = (0.15, -0.8, 0.6)
+        pose["knee.R"] = (-0.15, -0.8, 0.6)
+        pose["hand.L"] = (0.34, -0.06, 0.92 + 0.02 * k)
+        pose["hand_rot.L"] = (-20, 0, 30)
+        pose["elbow.L"] = RAISED_ELBOWS["elbow.L"]
+        key_pose(arm_obj, f, pose)
+
+    # --- Yayayken araba çarpması: geriye savrulur, poposunun üstüne düşer (kaykay sağ elde
+    #     kalır), kafasını silker, kalkar; yaya olarak devam eder. YAYA_DUS_FRAMES / 30 sn
+    #     (Godot'taki FOOT_FALL_TIME ile aynı). ---
+    act("yaya_dus")
+    hz = REST["hips"].z
+    sit = 0.13 - hz
+    feet_fwd = ((0.13, -0.32, 0.075), (-0.13, -0.3, 0.075))
+    foot_keys = [
+        # kare, kalça delta, gövde, kafa, sol el, sağ el, ayaklar, diz yukarı
+        (0, (0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), (0.25, 0.02, 0.63), (-0.27, 0.03, 0.66), ((0.11, 0.01, 0.075), (-0.11, 0.01, 0.075)), False),
+        (3, (0.02, 0.1, -0.03), (-24, 6, 8), (-20, 0, 0), (0.42, 0.05, 0.95), (-0.3, 0.1, 0.72), ((0.12, -0.12, 0.2), (-0.1, -0.05, 0.075)), False),
+        (7, (0.04, 0.32, -0.32), (-30, 8, 10), (-24, 10, 0), (0.46, 0.25, 0.75), (-0.32, 0.25, 0.55), ((0.13, -0.2, 0.36), (-0.1, -0.25, 0.3)), True),
+        (11, (0.05, 0.42, sit), (-22, 4, 4), (10, 0, 0), (0.27, 0.72, 0.06), (-0.3, 0.55, 0.25), feet_fwd, True),
+        (14, (0.05, 0.42, sit + 0.04), (-16, 0, 0), (6, 0, 0), (0.27, 0.72, 0.06), (-0.3, 0.55, 0.27), feet_fwd, True),
+        (17, (0.05, 0.42, sit), (-18, 0, 0), (2, 0, 0), (0.27, 0.72, 0.06), (-0.3, 0.55, 0.25), feet_fwd, True),
+        (22, (0.05, 0.42, sit), (-10, -6, 0), (8, -10, 16), (0.27, 0.72, 0.06), (-0.3, 0.5, 0.3), feet_fwd, True),
+        (27, (0.05, 0.42, sit), (-10, 6, 0), (8, 12, -16), (0.27, 0.72, 0.06), (-0.3, 0.5, 0.3), feet_fwd, True),
+        (32, (0.03, 0.34, sit + 0.12), (30, 0, 0), (-10, 0, 0), (0.2, 0.12, 0.32), (-0.3, 0.25, 0.4), ((0.13, 0.32, 0.075), (-0.13, 0.3, 0.075)), True),
+        (38, (0.0, 0.3, -0.2), (34, 0, 0), (-16, 0, 0), (0.17, 0.2, 0.42), (-0.29, 0.2, 0.55), ((0.12, 0.34, 0.075), (-0.12, 0.32, 0.075)), False),
+        (45, (0.0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), (0.25, 0.02, 0.63), (-0.27, 0.03, 0.66), ((0.11, 0.01, 0.075), (-0.11, 0.01, 0.075)), False),
+    ]
+    for f, hips, spine, head, hl, hr, (fl, fr), knees_up in foot_keys:
+        # Kalça 0 karede ayakta, sonra ayakların gerisine (karakter geriye düşer, sonra öne kalkar)
+        dy = hips[1]
+        pose = stand_pose(hips=hips, spine_rot=spine, head_rot=head,
+                          chest_rot=(spine[0] * 0.3, spine[1] * 0.5, spine[2] * 0.4))
+        pose["hand.L"] = (hl[0], hl[1], hl[2])
+        pose["hand.R"] = (hr[0], hr[1], hr[2])
+        pose["foot.L"] = (fl[0], fl[1] + dy * 0.0, fl[2])
+        pose["foot.R"] = (fr[0], fr[1] + dy * 0.0, fr[2])
+        if knees_up:
+            pose["knee.L"] = (0.2, -0.9, 0.75)
+            pose["knee.R"] = (-0.2, -0.9, 0.75)
+        if hl[2] < 0.2 or hl[2] > 0.9:
+            pose["elbow.L"] = RAISED_ELBOWS["elbow.L"] if hl[2] > 0.9 else (0.4, 0.4, 0.5)
+        if hl[2] < 0.2:
+            pose["hand_rot.L"] = (40, 0, 10)
+        key_pose(arm_obj, f, pose)
+
+    # --- Tutunma (skitching): arabanın arkasına sağ elle tutunmuş, çömelik, sol kol dengede.
+    #     El, kökün 0,6 m önünde tampon yüksekliğinde (Godot'ta SKITCH_GAP ile aynı) ---
+    act("tutun")
+    for f, k in ((0, 0.0), (15, 1.0), (30, 0.0)):
+        c = 0.13 + 0.01 * k
+        pose = ride_base(crouch=c, spine_rot=(20, -8, 0), chest_rot=(4, -6, 0), head_rot=(-12, 4, 0))
+        pose["hand.R"] = (-0.1, -0.6, 0.52 + 0.005 * k)
+        pose["hand_rot.R"] = (-70, 0, 0)
+        pose["elbow.R"] = (-0.3, 0.2, 0.5)
+        pose["hand.L"] = (0.4, 0.05, 0.78 + D - c + 0.02 * k)
+        pose["hand_rot.L"] = (-15, 0, 35)
+        pose["elbow.L"] = RAISED_ELBOWS["elbow.L"]
+        key_pose(arm_obj, f, pose)
+
     return acts
 
 

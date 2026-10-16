@@ -6,7 +6,7 @@ extends Control
 
 const SAVE_PATH := "user://tuning.cfg"
 ## Kontrol şeması değişince eski kayıtlar yok sayılır.
-const SAVE_VERSION := 3
+const SAVE_VERSION := 5
 
 var player: SkateController
 var camera: Node
@@ -14,13 +14,12 @@ var visual: Node
 var fx: Node
 var look: Node
 var touch_controls: Control
-var _look_button: Button
-var _board_button: Button
+var _look_button: PixelButton
+var _look_menu: Control
 
-var _speed_label: Label
 var _panel: PanelContainer
-var _settings_button: Button
-var _respawn_button: Button
+var _settings_button: PixelButton
+var _respawn_button: PixelButton
 var _sliders := []        # [{obj, prop, slider, label, fmt}]
 var _defaults := {}
 var _mode_option: OptionButton
@@ -38,13 +37,9 @@ func setup(p_player: SkateController, p_camera: Node, p_visual: Node, p_fx: Node
 	_capture_defaults()
 	_load()
 	_sync_widgets()
-	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _board_button])
-	player.mode_changed.connect(_update_board_button)
-	_update_board_button(player.on_foot)
-	look.changed.connect(func(n: String):
-		_look_button.text = "Görünüm: %s" % n
-		_sync_widgets())
-	_look_button.text = "Görünüm: %s" % look.preset_name()
+	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _look_menu])
+	touch_controls.player = player
+	look.changed.connect(func(_n: String): _sync_widgets())
 
 
 func _specs() -> Array:
@@ -115,6 +110,8 @@ func _specs() -> Array:
 		[look, "vertex_snap", 0.0, 8.0, 0.5, "Poligon titremesi (0 = kapalı)"],
 		["NPC", null],
 		[player.get_parent().get_node("Crowd"), "count", 0.0, 40.0, 1.0, "NPC sayısı"],
+		["TRAFİK", null],
+		[player.get_parent().get_node("Trafik"), "count", 0.0, 40.0, 1.0, "Araba sayısı"],
 		["HIZ EFEKTİ", null],
 		[fx, "warp", -1.0, 1.0, 0.01, "Bükülme (+ dıştan içe, - balıkgözü)"],
 		[fx, "blur", 0.0, 0.2, 0.005, "Kenar bulanıklığı"],
@@ -136,13 +133,6 @@ func _process(delta: float) -> void:
 		if _fps_log_timer > 2.0:
 			_fps_log_timer = 0.0
 			print("KAYKAY_FPS %d  hiz=%.1f  dunya=%s" % [Engine.get_frames_per_second(), player.speed, player.get_viewport().size])
-	var kmh := absf(player.speed) * 3.6
-	var state := "yerde" if player.grounded else "havada"
-	if player.on_foot:
-		state = "yürüyor"
-	if player.grinding:
-		state = "%s %.1f sn" % ["50-50" if player.grind_style == 0 else "BOARDSLIDE", player.grind_time]
-	_speed_label.text = "%d km/s  ·  %s  ·  %d FPS" % [roundi(kmh), state, Engine.get_frames_per_second()]
 
 
 func _notification(what: int) -> void:
@@ -160,46 +150,40 @@ func _build() -> void:
 	theme_res.default_font_size = int(vh * 0.03)
 	theme = theme_res
 
-	_speed_label = Label.new()
-	_speed_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	_speed_label.offset_top = 18
-	_speed_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_speed_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
-	_speed_label.add_theme_constant_override("outline_size", 6)
-	add_child(_speed_label)
+	# Hız göstergesi ve numara yazıları (piksel yazı)
+	var gauge := preload("res://scripts/ui/hud_gosterge.gd").new()
+	gauge.player = player
+	add_child(gauge)
+	var tricks := preload("res://scripts/ui/numara_yazisi.gd").new()
+	tricks.player = player
+	add_child(tricks)
 
-	var top := HBoxContainer.new()
-	top.position = Vector2(12, 12)
-	add_child(top)
-	_settings_button = Button.new()
-	_settings_button.text = "Ayarlar"
-	_settings_button.custom_minimum_size = Vector2(0, vh * 0.08)
+	# Sol üst: ikon butonlar (ayarlar, başa dön, görünüm)
+	var b := vh * 0.1
+	var m := vh * 0.04
+	_settings_button = _icon_button("ayar", Vector2(m, m), b)
 	_settings_button.pressed.connect(_toggle_panel)
-	top.add_child(_settings_button)
-	_respawn_button = Button.new()
-	_respawn_button.text = "Başa dön"
-	_respawn_button.custom_minimum_size = Vector2(0, vh * 0.08)
+	_respawn_button = _icon_button("basa", Vector2(m + (b + m * 0.5), m), b)
 	_respawn_button.pressed.connect(func(): player.respawn(); camera.snap())
-	top.add_child(_respawn_button)
-	_look_button = Button.new()
-	_look_button.custom_minimum_size = Vector2(0, vh * 0.08)
-	_look_button.pressed.connect(func(): look.next(); _save())
-	top.add_child(_look_button)
-
-	# Kaykaydan in / bin (sağ üst köşe, joystick'ten uzakta)
-	_board_button = Button.new()
-	_board_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_board_button.offset_left = -get_viewport_rect().size.x * 0.2
-	_board_button.offset_right = -12
-	_board_button.offset_top = 12
-	_board_button.offset_bottom = 12 + vh * 0.1
-	_board_button.pressed.connect(func(): SkateInput.request_board_toggle())
-	add_child(_board_button)
+	_look_button = _icon_button("goz", Vector2(m + (b + m * 0.5) * 2.0, m), b)
+	_look_menu = preload("res://scripts/ui/gorunum_menusu.gd").new()
+	_look_menu.look = look
+	add_child(_look_menu)
+	_look_menu.picked.connect(func():
+		_look_button.lit = false
+		_look_button.queue_redraw()
+		_save())
+	_look_button.pressed.connect(func():
+		if _look_menu.visible:
+			_look_menu.visible = false
+		else:
+			_look_menu.open_at(_look_button.position + Vector2(0, b + m * 0.3))
+		_look_button.lit = _look_menu.visible
+		_look_button.queue_redraw())
 
 	_panel = PanelContainer.new()
 	_panel.visible = false
-	_panel.position = Vector2(12, 12 + vh * 0.1)
+	_panel.position = Vector2(12, vh * 0.17)
 	_panel.size = Vector2(get_viewport_rect().size.x * 0.46, vh * 0.86)
 	add_child(_panel)
 	var scroll := ScrollContainer.new()
@@ -262,7 +246,7 @@ func _build() -> void:
 func _add_slider(box: VBoxContainer, spec: Array) -> void:
 	var label := Label.new()
 	box.add_child(label)
-	var slider := HSlider.new()
+	var slider := AyarSlider.new()
 	slider.min_value = spec[2]
 	slider.max_value = spec[3]
 	slider.step = spec[4]
@@ -288,8 +272,13 @@ func _update_label(entry: Dictionary) -> void:
 	entry.label.text = "%s: %s" % [entry.name, str(snappedf(entry.obj.get(entry.prop), 0.001))]
 
 
-func _update_board_button(on_foot: bool) -> void:
-	_board_button.text = "Kaykaya bin (E)" if on_foot else "Kaykaydan in (E)"
+func _icon_button(icon: String, pos: Vector2, side: float) -> PixelButton:
+	var btn := PixelButton.new()
+	btn.icon_name = icon
+	btn.position = pos
+	btn.size = Vector2(side, side)
+	add_child(btn)
+	return btn
 
 
 func _toggle_panel() -> void:
@@ -303,7 +292,7 @@ func _toggle_panel() -> void:
 func _key(obj: Object, prop: String) -> String:
 	var owners := {SkateInput: "input", player: "player", camera: "camera", visual: "visual", fx: "fx", look: "look",
 		look.env: "env", Haptics.instance: "haptics", player.get_node("Feedback"): "feedback",
-		player.get_parent().get_node("Crowd"): "npc"}
+		player.get_parent().get_node("Crowd"): "npc", player.get_parent().get_node("Trafik"): "trafik"}
 	return "%s.%s" % [owners[obj], prop]
 
 

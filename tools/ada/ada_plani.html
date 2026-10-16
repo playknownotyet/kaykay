@@ -1,0 +1,1429 @@
+<title>Ada Yol Planı</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Düzen: ölçüm masası — solda deniz haritası (çizim alanı), sağda alet paneli, altta yol profili şeridi.
+   Renkler deniz haritası geleneğinden: kara sarısı (buff), deniz mavisi, eş yükselti kahvesi, not moru. */
+:root {
+  --bg: #e9ecea;
+  --panel: #f7f8f6;
+  --ink: #1f2a2e;
+  --ink-soft: #57656a;
+  --line: #c9d0cd;
+  --sea: #cfe5ec;
+  --sea-deep: #9fcad8;
+  --land: #f0e2ae;
+  --land-high: #d9c48c;
+  --contour: #9a7b4f;
+  --road: #3a3f44;
+  --walk: #f8f6ef;
+  --plaza: #e8d9bf;
+  --pier: #a5784a;
+  --accent: #b0306f;
+  --accent-ink: #ffffff;
+  --ok: #3e9b5f;
+  --mid: #c9b437;
+  --warn: #e0812f;
+  --bad: #d0412f;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d151b; --panel: #121d24; --ink: #e3e9e6; --ink-soft: #95a5a8; --line: #2a3a42;
+    --sea: #12303e; --sea-deep: #0b2230; --land: #4a4128; --land-high: #6a5c36; --contour: #b49660;
+    --road: #20252a; --walk: #8d8a80; --plaza: #6e6150; --pier: #8a6440;
+    --accent: #e05b9a; --accent-ink: #160a10; --ok: #4fb874; --mid: #d8c548; --warn: #ef9445; --bad: #ef5b4a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d151b; --panel: #121d24; --ink: #e3e9e6; --ink-soft: #95a5a8; --line: #2a3a42;
+  --sea: #12303e; --sea-deep: #0b2230; --land: #4a4128; --land-high: #6a5c36; --contour: #b49660;
+  --road: #20252a; --walk: #8d8a80; --plaza: #6e6150; --pier: #8a6440;
+  --accent: #e05b9a; --accent-ink: #160a10; --ok: #4fb874; --mid: #d8c548; --warn: #ef9445; --bad: #ef5b4a;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 14px; }
+.app {
+  display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto minmax(0, 1fr) 210px;
+  gap: 10px; height: 100%; box-sizing: border-box;
+  padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+header { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+h1 { font-family: var(--display); font-weight: 700; font-size: 26px; letter-spacing: 0.04em; text-transform: uppercase; margin: 0; }
+.sub { color: var(--ink-soft); font-size: 13px; }
+.stage { position: relative; min-height: 0; border: 1px solid var(--line); background: var(--sea); overflow: hidden; border-radius: 4px; }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#gl { display: none; }
+.stage.three #gl { display: block; }
+.stage.three #map { display: none; }
+.toolbar { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; flex-wrap: wrap; z-index: 2; }
+.legend { position: absolute; bottom: 10px; left: 10px; z-index: 2; display: flex; gap: 10px; flex-wrap: wrap;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 10px; border-radius: 4px; font-size: 12px; }
+.legend i { display: inline-block; width: 18px; height: 6px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.hud { position: absolute; top: 10px; right: 10px; z-index: 2; font-family: var(--mono); font-size: 13px;
+  background: color-mix(in srgb, var(--panel) 90%, transparent); padding: 8px 10px; border-radius: 4px; min-width: 150px; }
+.hud b { font-size: 22px; font-weight: 500; }
+button, .seg button {
+  font: 600 13px var(--display); letter-spacing: 0.06em; text-transform: uppercase;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 3px; padding: 6px 10px; cursor: pointer;
+}
+button:hover { border-color: var(--ink-soft); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.on, button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+.panel { grid-row: 2 / 4; grid-column: 2; min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+.panel section { padding: 10px 14px 12px; border-bottom: 1px solid var(--line); }
+.panel h2 { font-family: var(--display); font-weight: 600; font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 8px; color: var(--accent); }
+.row { display: grid; grid-template-columns: 1fr 64px; align-items: center; gap: 2px 8px; margin-bottom: 6px; }
+.row label { font-size: 12.5px; color: var(--ink-soft); }
+.row output { font-family: var(--mono); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.row input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); margin: 0; }
+.chk { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-soft); margin-bottom: 6px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.note { font-size: 12px; color: var(--ink-soft); margin: 6px 0 0; line-height: 1.45; }
+.status { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); margin-top: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+th { font-family: var(--display); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft); text-align: right; padding: 3px 4px; font-size: 12px; }
+th:first-child, td:first-child { text-align: left; }
+td { padding: 4px; text-align: right; font-family: var(--mono); border-top: 1px solid var(--line); }
+td:first-child { font-family: var(--body); }
+tr.sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+tbody tr { cursor: pointer; }
+.pill { display: inline-block; min-width: 38px; padding: 1px 5px; border-radius: 9px; color: #fff; text-align: center; }
+.warnlist { margin: 6px 0 0; padding-left: 16px; font-size: 12px; color: var(--ink-soft); }
+.warnlist li { margin-bottom: 3px; }
+.profile { grid-column: 1; position: relative; border: 1px solid var(--line); background: var(--panel); border-radius: 4px; min-height: 0; }
+.profile canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ptitle { position: absolute; top: 6px; left: 10px; font-family: var(--display); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; font-size: 14px; z-index: 1; }
+.pdir { position: absolute; top: 4px; right: 8px; z-index: 1; display: flex; gap: 4px; }
+@media (max-width: 900px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 62vh 200px auto; height: auto; }
+  .panel { grid-row: auto; grid-column: 1; overflow: visible; }
+  .profile { grid-column: 1; }
+  .hud { font-size: 12px; min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<div class="app">
+  <header>
+    <h1>Ada Yol Planı</h1>
+    <span class="sub">Kaba arazi ve yol ağı · ölçüler metre · eğim ve hız oyunun kaykay fiziğiyle hesaplanır</span>
+  </header>
+
+  <div class="stage" id="stage">
+    <canvas id="map" aria-label="Ada haritası: tutamaçları sürükleyerek düzenle"></canvas>
+    <canvas id="gl" aria-label="Üç boyutlu ada görünümü"></canvas>
+    <div class="toolbar">
+      <button id="v2" class="on" aria-pressed="true">Harita</button>
+      <button id="v3" aria-pressed="false">3B</button>
+      <button id="ride" hidden>Sür ▶</button>
+      <button id="fit">Ortala</button>
+    </div>
+    <div class="hud" id="hud" hidden></div>
+    <div class="legend" id="legend">
+      <span><i style="background:var(--ok)"></i>&lt;3%</span>
+      <span><i style="background:var(--mid)"></i>3–6%</span>
+      <span><i style="background:var(--warn)"></i>6–9%</span>
+      <span><i style="background:var(--bad)"></i>&gt;9%</span>
+      <span>· Tutamaçları sürükle, yolu seçmek için üstüne tıkla</span>
+    </div>
+  </div>
+
+  <aside class="panel" id="panel"></aside>
+
+  <div class="profile">
+    <div class="ptitle" id="ptitle">Yol profili</div>
+    <div class="pdir"><button id="dirF" class="on" aria-pressed="true">İleri</button><button id="dirB" aria-pressed="false">Geri</button></div>
+    <canvas id="prof"></canvas>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------------------
+// Varsayılan plan (eskizden): batı-kuzeybatıda tepe, merkezin doğusunda meydan,
+// doğu kıyısında iki iskeleli liman, meydandan yıldız biçimli caddeler, kıyıda çevre yolu.
+// Koordinatlar: metre, +x doğu, +y kuzey, (0,0) ada merkezi.
+// ---------------------------------------------------------------------------
+const DEFAULTS = {
+  size: 950,
+  coast: [0.95, 0.87, 0.9, 0.8, 0.76, 0.94, 1.0, 1.0, 0.96, 0.97, 0.88, 0.88],
+  rough: 0.5,
+  seed: 7,
+  terrain: { base: 4, beach: 22, roll: 2.5 },
+  hill: { x: -215, y: 135, radius: 215, height: 55, steep: 1.25, foot: 8, etek: true },
+  plaza: { x: 195, y: -10, r: 26, ringW: 10 },
+  harbor: { angle: -14, depth: 48, width: 13, piers: 2, pierLen: 46 },
+  ring: { inset: 26, width: 12 },
+  avenues: { width: 11, list: [{ a: 32, b: 0 }, { a: 92, b: 0.15 }, { a: 158, b: 0 }, { a: 212, b: -0.12 }, { a: 268, b: 0.1 }, { a: 322, b: 0 }] },
+  inner: { count: 1, r1: 125, r2: 235, width: 8 },
+  serp: { dir: -20, grade: 6.5, spread: 70, hairpin: 12, width: 8 },
+  build: { maxGrade: 9, fillet: 9, sidewalk: 3, curb: 0.15 },
+  view: { gradeColors: true, contours: true },
+};
+const PHYS = { g: 14.5, rr: 0.19, drag: 0.009, vmax: 14, push: 2.4, pushUntil: 4.2 };   // skate_controller.gd
+
+const clone = (o) => JSON.parse(JSON.stringify(o));
+function merge(def, v) {
+  if (Array.isArray(def) || typeof def !== "object" || def === null) return v === undefined ? def : v;
+  const o = {};
+  for (const k of Object.keys(def)) o[k] = merge(def[k], v ? v[k] : undefined);
+  return o;
+}
+// Eski kayıtlardan gelen alanları yeni modele taşı
+function migrate(p) {
+  if (p && p.avenues && p.avenues.hillStop != null && p.hill && p.hill.foot == null) p.hill.foot = p.avenues.hillStop;
+  return p;
+}
+let S = clone(DEFAULTS), draftT = 0;
+try {
+  const d = JSON.parse(localStorage.getItem("ada-plani-taslak2") || "null");
+  if (d && d.plan) { S = merge(DEFAULTS, migrate(d.plan)); draftT = d.t || 0; }
+} catch (e) {}
+
+// ---------------------------------------------------------------------------
+// Yardımcılar
+// ---------------------------------------------------------------------------
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const rad = (d) => d * Math.PI / 180;
+const deg = (r) => r * 180 / Math.PI;
+const angDiff = (a, b) => { let d = (a - b) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
+const catmull = (p0, p1, p2, p3, t) => 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function hash2(x, y, s) { let h = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453; return h - Math.floor(h); }
+function vnoise(x, y, s) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi, s), b = hash2(xi + 1, yi, s), c = hash2(xi, yi + 1, s), d = hash2(xi + 1, yi + 1, s);
+  return lerp(lerp(a, b, u), lerp(c, d, u), v) * 2 - 1;
+}
+const fbm = (x, y, s) => vnoise(x, y, s) * 0.6 + vnoise(x * 2.1, y * 2.1, s + 1) * 0.28 + vnoise(x * 4.3, y * 4.3, s + 2) * 0.12;
+
+// ---------------------------------------------------------------------------
+// Kıyı ve arazi
+// ---------------------------------------------------------------------------
+let roughPh = [];
+function prepRough() { roughPh = []; for (let k = 3; k <= 11; k++) roughPh.push(hash2(k, 1, S.seed) * TAU); }
+
+function coastR(th) {
+  const c = S.coast, n = c.length;
+  let u = ((th / TAU) * n) % n; if (u < 0) u += n;
+  const i = Math.floor(u), t = u - i;
+  let r = catmull(c[(i - 1 + n) % n], c[i], c[(i + 1) % n], c[(i + 2) % n], t) * S.size / 2;
+  let w = 0; for (let k = 3; k <= 11; k++) w += Math.sin(k * th + roughPh[k - 3]) / k;
+  r *= 1 + S.rough * 0.09 * w;
+  const d = angDiff(th, rad(S.harbor.angle));
+  r -= S.harbor.depth * Math.exp(-2.2 * (d / rad(S.harbor.width)) ** 2);
+  return r;
+}
+const inland = (x, y) => coastR(Math.atan2(y, x)) - Math.hypot(x, y);
+
+function hillH(x, y) {
+  const H = S.hill, t = Math.hypot(x - H.x, y - H.y) / H.radius;
+  if (t >= 1) return 0;
+  return H.height * Math.pow(0.5 + 0.5 * Math.cos(Math.PI * t), H.steep);
+}
+function rawHeight(x, y, s) {
+  const T = S.terrain;
+  let h = 0.5 + (T.base - 0.5) * smooth(0, T.beach * 3, s);
+  h += T.roll * fbm(x / 170, y / 170, S.seed) * smooth(0, 90, s);
+  h += hillH(x, y) * smooth(0, 55, s);
+  return h;
+}
+let plazaH = 4, harborPt = { x: 0, y: 0 };
+function height(x, y) {
+  const s = inland(x, y);
+  if (s < 0) return Math.max(-14, s * 0.1) - 0.6;
+  let h = rawHeight(x, y, s);
+  const P = S.plaza, dp = Math.hypot(x - P.x, y - P.y);
+  h = lerp(h, plazaH, 1 - smooth(P.r + P.ringW + 6, P.r + P.ringW + 70, dp));
+  const dh = Math.hypot(x - harborPt.x, y - harborPt.y);
+  h = lerp(h, 1.6, 1 - smooth(S.harbor.depth + 25, S.harbor.depth + 80, dh));
+  return h;
+}
+
+// Yükseklik ızgarası (gölgeleme, eş yükselti, 3B)
+let G = null;
+function buildGrid() {
+  prepRough();
+  const P = S.plaza;
+  plazaH = rawHeight(P.x, P.y, inland(P.x, P.y));
+  const ha = rad(S.harbor.angle);
+  const hr = coastR(ha);
+  harborPt = { x: Math.cos(ha) * (hr - 10), y: Math.sin(ha) * (hr - 10) };
+  const ext = S.size * 0.64, N = 200, cell = (2 * ext) / N;
+  const h = new Float32Array((N + 1) * (N + 1)), land = new Float32Array((N + 1) * (N + 1));
+  for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+    const x = -ext + i * cell, y = -ext + j * cell;
+    h[j * (N + 1) + i] = height(x, y);
+    land[j * (N + 1) + i] = inland(x, y);
+  }
+  G = { ext, N, cell, h, land };
+  G.contours = contourLines(5);
+  G.img = shadeImage();
+}
+function gridH(x, y) {
+  const { ext, N, cell, h } = G;
+  const fx = clamp((x + ext) / cell, 0, N - 0.001), fy = clamp((y + ext) / cell, 0, N - 0.001);
+  const i = Math.floor(fx), j = Math.floor(fy), tx = fx - i, ty = fy - j, W = N + 1;
+  return lerp(lerp(h[j * W + i], h[j * W + i + 1], tx), lerp(h[(j + 1) * W + i], h[(j + 1) * W + i + 1], tx), ty);
+}
+
+function contourLines(step) {
+  const { ext, N, cell, h } = G, W = N + 1, out = [];
+  const maxH = Math.max(...h);
+  for (let lv = step; lv < maxH; lv += step) {
+    const major = Math.abs(lv % 25) < 1e-6;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const a = h[j * W + i], b = h[j * W + i + 1], c = h[(j + 1) * W + i + 1], d = h[(j + 1) * W + i];
+      let code = (a > lv ? 1 : 0) | (b > lv ? 2 : 0) | (c > lv ? 4 : 0) | (d > lv ? 8 : 0);
+      if (code === 0 || code === 15) continue;
+      const x0 = -ext + i * cell, y0 = -ext + j * cell;
+      const e = [
+        [x0 + cell * (lv - a) / (b - a), y0],
+        [x0 + cell, y0 + cell * (lv - b) / (c - b)],
+        [x0 + cell * (lv - d) / (c - d), y0 + cell],
+        [x0, y0 + cell * (lv - a) / (d - a)],
+      ];
+      const T = { 1: [[3, 0]], 2: [[0, 1]], 3: [[3, 1]], 4: [[1, 2]], 5: [[3, 0], [1, 2]], 6: [[0, 2]], 7: [[3, 2]],
+        8: [[2, 3]], 9: [[0, 2]], 10: [[0, 1], [2, 3]], 11: [[1, 2]], 12: [[1, 3]], 13: [[0, 1]], 14: [[0, 3]] }[code];
+      for (const [p, q] of T) out.push([e[p][0], e[p][1], e[q][0], e[q][1], major]);
+    }
+  }
+  return out;
+}
+
+function hexRGB(hx) { const m = hx.replace("#", ""); return [parseInt(m.slice(0, 2), 16), parseInt(m.slice(2, 4), 16), parseInt(m.slice(4, 6), 16)]; }
+function shadeImage() {
+  const { N, h, land, cell } = G, W = N + 1;
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = W;
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(W, W);
+  const sea = hexRGB(css("--sea")), deep = hexRGB(css("--sea-deep")), lnd = hexRGB(css("--land")), hi = hexRGB(css("--land-high"));
+  const maxH = Math.max(8, S.hill.height + S.terrain.base);
+  for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+    const k = j * W + i, o = ((N - j) * W + i) * 4;
+    let col;
+    if (land[k] < 0) {
+      const t = smooth(0, 1, -land[k] / 120);
+      col = sea.map((v, q) => lerp(v, deep[q], t));
+    } else {
+      const hx = h[j * W + Math.min(i + 1, N)] - h[j * W + Math.max(i - 1, 0)];
+      const hy = h[Math.min(j + 1, N) * W + i] - h[Math.max(j - 1, 0) * W + i];
+      const nx = -hx / (2 * cell), ny = -hy / (2 * cell);
+      const shade = clamp(1 + (nx * -0.7 + ny * 0.7) * 2.2, 0.6, 1.25);   // ışık kuzeybatıdan
+      const t = clamp(h[k] / maxH, 0, 1);
+      col = lnd.map((v, q) => clamp(lerp(v, hi[q], t) * shade, 0, 255));
+    }
+    img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv;
+}
+
+// ---------------------------------------------------------------------------
+// Yol ağı
+//
+// Akış kuralları (sürüş hissi):
+//  - Kavşakta buluşan yollar aynı yükseklikte (ortak "pin"); kavşağın iki yanında
+//    düz iniş bölgesi (%3 altı) — kavşağa dik yokuştan dalınmaz.
+//  - Caddeler çevre yoluna ve meydan göbeğine dik girer; tepeye çarpan yollar
+//    etek yolunda biter (serpantinin içine girmez).
+//  - Serpantin tepenin meydana bakan yüzünde kollar halinde hep aşağı iner; kolları
+//    hedef eğimi tutturacak kadar uzun, dönemeçleri düz.
+//  - Dikey kırılmalar yumuşatılır (sert tepe / çukur yok).
+// ---------------------------------------------------------------------------
+const FLOW = { aLat: 5.0, brake: 4.0, jT: 6.5, jX: 9.0, landing: 14, landingGrade: 0.03, hairpinGrade: 0.03, vcurve: 0.03 };
+
+function resample(pts, step) {
+  const out = [pts[0]]; let carry = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], L = Math.hypot(b.x - a.x, b.y - a.y);
+    let d = step - carry;
+    while (d <= L) { const t = d / L; out.push({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) }); d += step; }
+    carry = L - (d - step);
+  }
+  const last = pts[pts.length - 1], tail = out[out.length - 1];
+  if (Math.hypot(last.x - tail.x, last.y - tail.y) > step * 0.5 || out.length < 2) out.push({ x: last.x, y: last.y });
+  else out[out.length - 1] = { x: last.x, y: last.y };
+  return out;
+}
+function chaikin(pts, it) {
+  let p = pts;
+  for (let k = 0; k < it; k++) {
+    const o = [p[0]];
+    for (let i = 0; i < p.length - 1; i++) {
+      const a = p[i], b = p[i + 1];
+      o.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 }, { x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
+    }
+    o.push(p[p.length - 1]); p = o;
+  }
+  return p;
+}
+function nearestOn(pts, x, y) {
+  let best = { d: 1e9, i: 0, x: 0, y: 0 };
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], dx = b.x - a.x, dy = b.y - a.y;
+    const t = clamp(((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+    const px = a.x + dx * t, py = a.y + dy * t, d = Math.hypot(px - x, py - y);
+    if (d < best.d) best = { d, i: t > 0.5 ? i + 1 : i, x: px, y: py };
+  }
+  return best;
+}
+const polyLen = (p) => { let L = 0; for (let i = 1; i < p.length; i++) L += Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y); return L; };
+const polar = (c, a, r) => ({ x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r });
+function dirAt(pts, i) { const a = pts[Math.max(i - 1, 0)], b = pts[Math.min(i + 1, pts.length - 1)], L = Math.hypot(b.x - a.x, b.y - a.y) || 1; return { x: (b.x - a.x) / L, y: (b.y - a.y) / L }; }
+
+let ROADS = [], JUNC = [], SERP_INFO = {}, ETEK = [], ETEK_H = 0;
+
+// Etek yolu: tepenin eteğini sabit yükseltide (meydan + hill.foot) dolaşan kontur yolu
+function etekLines() {
+  const H = S.hill, target = plazaH + H.foot, N = 180;
+  ETEK_H = target;
+  const rr = new Array(N).fill(null);
+  for (let k = 0; k < N; k++) {
+    const th = TAU * k / N;
+    for (let d = 14; d < H.radius * 1.6; d += 2) { const q = polar(H, th, d); if (gridH(q.x, q.y) <= target) { rr[k] = d; break; } }
+  }
+  // Engebe dalgalarını yumuşat (yarıçap üzerinde dairesel ortalama)
+  const sm = rr.map((v, k) => { if (v == null) return null; let s = 0, c = 0; for (let j = -4; j <= 4; j++) { const w = rr[(k + j + N) % N]; if (w != null) { s += w; c++; } } return s / c; });
+  const ok = sm.map((v, k) => v != null && inland(polar(H, TAU * k / N, v).x, polar(H, TAU * k / N, v).y) > S.ring.inset + S.ring.width / 2 + S.build.sidewalk + 16);
+  const runs = [];
+  if (ok.every(Boolean)) {
+    const pts = sm.map((v, k) => polar(H, TAU * k / N, v)); pts.push(pts[0]);
+    runs.push({ pts: resample(chaikin(pts, 2), 5), closed: true });
+  } else {
+    let start = ok.indexOf(false);
+    let cur = [];
+    for (let j = 1; j <= N; j++) {
+      const k = (start + j) % N;
+      if (ok[k]) cur.push(polar(H, TAU * k / N, sm[k]));
+      else { if (cur.length >= 10) runs.push({ pts: resample(chaikin(cur, 2), 5), closed: false }); cur = []; }
+    }
+    if (cur.length >= 10) runs.push({ pts: resample(chaikin(cur, 2), 5), closed: false });
+  }
+  return runs;
+}
+
+// Serpantin tasarımı (tepe merkezli kutupsal): yol tepeden hedef eğimle inen ideal bir çizgiyi
+// izler. Her adımda yarıçap öyle seçilir ki arazi yol çizgisine otursun: dönemeçten sonra yol
+// araziden yüksek kaldıysa kol yamaç boyunca yatay ilerleyip araziyi yakalar, alçak kaldıysa dik
+// iner. Kollar ±W açısında döner, dönemeçler yarım daire (eğimi FLOW.hairpinGrade).
+function serpDesign(W, rh, g, rLimAt, dirA, topH) {
+  const H = S.hill, pts = [], at = (phi, r) => polar(H, dirA + phi, r), hAt = (phi, r) => { const q = at(phi, r); return gridH(q.x, q.y); };
+  const slope = (phi, r) => Math.max(0.01, (hAt(phi, r - 3) - hAt(phi, r + 3)) / 6);
+  const step = 4, r0 = 26;
+  let r = 17, phi = -W, road = topH, guard = 0;
+  pts.push(at(phi, r));
+  const advance = (dirPhi, grade) => {
+    road -= grade * step;
+    const t = hAt(phi, r), Sl = slope(phi, r);
+    const dr = clamp((t - road) / Sl, 0, step * 0.95);
+    if (dirPhi) phi += dirPhi * Math.sqrt(Math.max(step * step - dr * dr, 0.5)) / r;
+    r += dirPhi ? dr : step;
+    pts.push(at(phi, r));
+  };
+  while (r < r0) { road -= g * step; r += step; pts.push(at(phi, r)); }
+  road = Math.min(road, hAt(phi, r));
+  let side = 1, legs = 1;
+  const lim = () => rLimAt(phi);
+  const done = () => r >= lim() - 2 || road <= ETEK_H + 0.5;
+  while (!done() && guard++ < 6000) {
+    // Kol: açı sınırına ya da o yöndeki etek mesafesine (dönemeç payıyla) kadar
+    while (side * phi < W && !done() && r + 2 * rh < lim() - 12 && guard++ < 6000) advance(side, g);
+    if (done() || r + 2 * rh >= lim() - 2) break;
+    const a = dirA + phi, rhat = { x: Math.cos(a), y: Math.sin(a) }, that = { x: -Math.sin(a) * side, y: Math.cos(a) * side };
+    const c = polar(H, a, r + rh);
+    for (let q = 1; q < 14; q++) { const ps = Math.PI * q / 14; pts.push({ x: c.x - rhat.x * rh * Math.cos(ps) + that.x * rh * Math.sin(ps), y: c.y - rhat.y * rh * Math.cos(ps) + that.y * rh * Math.sin(ps) }); }
+    road -= FLOW.hairpinGrade * Math.PI * rh;
+    r += 2 * rh; side = -side; legs++;
+  }
+  // Bitiş: meydan yönüne (açı 0) dön
+  while (Math.abs(phi) > 0.03 && guard++ < 7000) {
+    const before = phi;
+    advance(-Math.sign(phi), g);
+    if (Math.sign(before) !== Math.sign(phi)) { phi = 0; break; }
+  }
+  return { pts, legs, road, rEndReached: r };
+}
+
+function buildRoads() {
+  const roads = [];
+  const R = S.ring, P = S.plaza, H = S.hill;
+  // Çevre yolu
+  const ring = [];
+  for (let k = 0; k <= 240; k++) { const th = TAU * k / 240, r = coastR(th) - R.inset; ring.push({ x: Math.cos(th) * r, y: Math.sin(th) * r }); }
+  roads.push({ id: "ring", name: "Çevre yolu", kind: "ring", width: R.width, pts: resample(chaikin(ring, 2), 5), closed: true });
+  // Meydan göbeği
+  const rr = P.r + P.ringW / 2, plz = [];
+  for (let k = 0; k <= 72; k++) { const th = TAU * k / 72; plz.push({ x: P.x + Math.cos(th) * rr, y: P.y + Math.sin(th) * rr }); }
+  roads.push({ id: "plaza", name: "Meydan göbeği", kind: "plaza", width: P.ringW, pts: plz, closed: true });
+  // Etek yolu
+  ETEK = S.hill.etek ? etekLines() : [];
+  ETEK.forEach((e, i) => roads.push({ id: "etek" + i, name: "Etek yolu" + (ETEK.length > 1 ? " " + (i + 1) : ""), kind: "street", width: S.inner.width, pts: e.pts, closed: e.closed }));
+  const etekHit = (x, y) => { for (const e of ETEK) { const q = nearestOn(e.pts, x, y); if (q.d < 3) return { q, e }; } return null; };
+
+  // Serpantin tabanı: meydan yönünde etek yolu üstünde
+  const dirA = rad(S.serp.dir);
+  let base = null;
+  for (let d = 20; d < H.radius * 1.6; d += 2) { const q = polar(H, dirA, d); if (etekHit(q.x, q.y) || gridH(q.x, q.y) <= ETEK_H) { base = q; break; } }
+  if (!base) base = polar(H, dirA, H.radius * 0.8);
+
+  // Caddeler: göbekten dik çıkar, çevre yoluna / etek yoluna dik girer (kübik eğri)
+  S.avenues.list.forEach((av, i) => {
+    const a = rad(av.a), dx = Math.cos(a), dy = Math.sin(a);
+    const st = { x: P.x + dx * rr, y: P.y + dy * rr };
+    let en = null, nIn = null, foot = false;
+    for (let d = rr + 6; d < S.size * 1.3; d += 3) {
+      const x = P.x + dx * d, y = P.y + dy * d;
+      if (inland(x, y) <= R.inset) {
+        const q = nearestOn(roads[0].pts, x, y), t = dirAt(roads[0].pts, q.i);
+        let nx = -t.y, ny = t.x; if (nx * (P.x - q.x) + ny * (P.y - q.y) < 0) { nx = -nx; ny = -ny; }
+        en = q; nIn = { x: nx, y: ny }; break;
+      }
+      const eh = etekHit(x, y);
+      if (eh) { const L = Math.hypot(eh.q.x - H.x, eh.q.y - H.y); en = eh.q; nIn = { x: (eh.q.x - H.x) / L, y: (eh.q.y - H.y) / L }; foot = true; break; }
+      if (gridH(x, y) > ETEK_H + 1) { en = { x, y }; nIn = { x: -dx, y: -dy }; foot = true; break; }
+      if (Math.hypot(x - base.x, y - base.y) < 10) { en = { x: base.x, y: base.y }; const L = Math.hypot(base.x - H.x, base.y - H.y); nIn = { x: (base.x - H.x) / L, y: (base.y - H.y) / L }; foot = true; break; }
+    }
+    if (!en) return;
+    const L = Math.hypot(en.x - st.x, en.y - st.y), px = -dy, py = dx, b = av.b * L * 0.35;
+    const c1 = { x: st.x + dx * L / 3 + px * b, y: st.y + dy * L / 3 + py * b };
+    const c2 = { x: en.x + nIn.x * L / 3 + px * b, y: en.y + nIn.y * L / 3 + py * b };
+    const pts = [];
+    for (let k = 0; k <= 48; k++) {
+      const t = k / 48, u = 1 - t;
+      pts.push({ x: u * u * u * st.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * en.x,
+                 y: u * u * u * st.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * en.y });
+    }
+    roads.push({ id: "av" + i, name: "Cadde " + (i + 1) + (foot ? " (etek)" : ""), kind: "avenue", width: S.avenues.width, pts: resample(pts, 5), end: en, idx: i, foot });
+  });
+  // Serpantin tabanı bir caddenin etek ucuna yakınsa onunla birleşsin (akış kesintisiz)
+  for (const r of roads) if (r.foot) { const e = r.pts[r.pts.length - 1]; if (Math.hypot(e.x - base.x, e.y - base.y) < 45) { base = { x: e.x, y: e.y }; break; } }
+
+  // İç halkalar: meydan merkezli; çevre yolunun dışında ve tepe bölgesinde kesilir,
+  // kesilen uçlar yakındaki etek / çevre yoluna uzatılır (çıkmaz kalmaz)
+  [S.inner.r1, S.inner.r2].slice(0, S.inner.count).forEach((r, ri) => {
+    let seg = [], part = 0;
+    const cands = roads.filter((q) => q.kind === "ring" || q.id.startsWith("etek"));
+    const attach = (p) => { let best = null; for (const q of cands) { const c = nearestOn(q.pts, p.x, p.y); if (c.d < 40 && (!best || c.d < best.d)) best = c; } return best; };
+    const flush = () => {
+      if (seg.length > 6) {
+        const a = attach(seg[0]), b = attach(seg[seg.length - 1]);
+        const pts = (a ? [{ x: a.x, y: a.y }] : []).concat(seg, b ? [{ x: b.x, y: b.y }] : []);
+        roads.push({ id: `in${ri}_${part}`, name: `İç halka ${ri + 1}${part ? " · " + (part + 1) : ""}`, kind: "street", width: S.inner.width, pts: resample(chaikin(pts, 1), 5) });
+        part++;
+      }
+      seg = [];
+    };
+    // Etek yolunun yanından paralel geçmesin (farklı yükseklikte iki yolun kaldırımları üst üste biner):
+    // aradaki boşluk iki yarım genişlik + iki kaldırım + 6 m olmalı; kesilen uç etek yoluna bağlanır
+    const etekGap = S.inner.width + 2 * S.build.sidewalk + 6;
+    const clearEtek = (x, y) => ETEK.every((e) => nearestOn(e.pts, x, y).d > etekGap);
+    const ok = (x, y) => inland(x, y) > R.inset + R.width / 2 + 10 && gridH(x, y) < ETEK_H - 1 && Math.hypot(x - H.x, y - H.y) > 30 && clearEtek(x, y);
+    const N = 180, flags = []; for (let k = 0; k < N; k++) { const th = TAU * k / N; flags.push(ok(P.x + Math.cos(th) * r, P.y + Math.sin(th) * r)); }
+    if (flags.every(Boolean)) {
+      const pts = []; for (let k = 0; k <= N; k++) { const th = TAU * k / N; pts.push({ x: P.x + Math.cos(th) * r, y: P.y + Math.sin(th) * r }); }
+      roads.push({ id: `in${ri}_0`, name: `İç halka ${ri + 1}`, kind: "street", width: S.inner.width, pts: resample(pts, 5), closed: true });
+    } else {
+      const s0 = flags.indexOf(false);
+      for (let j = 1; j <= N; j++) { const k = (s0 + j) % N, th = TAU * k / N; if (flags[k]) seg.push({ x: P.x + Math.cos(th) * r, y: P.y + Math.sin(th) * r }); else flush(); }
+      flush();
+    }
+  });
+
+  // Serpantin: kollar yamaca hedef eğimle oturur; düşüş tabana yetişmiyorsa kol açısı genişletilir
+  const top = { x: H.x, y: H.y }, topH = gridH(H.x, H.y);
+  const rBase = Math.hypot(base.x - H.x, base.y - H.y), rh = S.serp.hairpin, g = S.serp.grade / 100;
+  // Her yönde etek mesafesi (kollar o yönde bu sınıra kadar açılabilir)
+  const limTab = [];
+  for (let k = 0; k <= 72; k++) {
+    const ph = -Math.PI + TAU * k / 72; let lim = 40;
+    for (let d = 20; d < H.radius * 1.6; d += 3) { const q = polar(H, dirA + ph, d); if (gridH(q.x, q.y) <= ETEK_H + 1.5 || inland(q.x, q.y) < S.ring.inset + 20) { lim = d; break; } }
+    limTab.push(lim - 14);                     // etek yoluna kaldırımlarıyla birlikte değmesin
+  }
+  const rLimAt = (ph) => { let u = ((ph + Math.PI) / TAU) * 72; u = clamp(u, 0, 72); const i = Math.floor(u), t = u - i; return lerp(limTab[i], limTab[Math.min(i + 1, 72)], t); };
+  const drop = Math.max(5, topH - ETEK_H), want = drop / g;
+  // Tabana inildiğinde yol hâlâ etek yolundan yüksekse kollar genişletilir
+  const leftover = (d) => d.road - ETEK_H - g * Math.max(0, rBase - d.rEndReached);
+  // Hedefi tutturan en yakın tasarım: önce kullanıcının dönemeç yarıçapı ve açısı, gerekirse
+  // açı genişler, sonra dönemeç yarıçapı azıcık değişir
+  let best = null;
+  const rhs = [rh, rh - 2, rh + 2, rh - 4, rh + 4].filter((v) => v >= 8 && v <= 32);
+  outer: for (const r of rhs) {
+    for (let W0 = rad(S.serp.spread); W0 <= rad(170) + 1e-6; W0 += rad(6)) {
+      const d = serpDesign(W0, r, g, rLimAt, dirA, topH), lo = leftover(d);
+      const score = Math.max(0, lo) + Math.abs(r - rh) * 0.5 + deg(W0 - rad(S.serp.spread)) * 0.02;
+      if (!best || score < best.score) best = { d, W: W0, rh: r, score, lo };
+      if (lo <= 2) break outer;
+    }
+  }
+  const des = best.d, W = best.W, widened = W > rad(S.serp.spread) + 1e-6, rhUsed = best.rh;
+  let serp = des.pts;
+  serp = serp.concat(resample([serp[serp.length - 1], base], 4).slice(1));
+  roads.push({ id: "serp", name: "Serpantin", kind: "serp", width: S.serp.width, pts: resample(chaikin(serp, 1), 4) });
+  SERP_INFO = { top, base, legs: des.legs, spread: deg(W), widened, drop, want, short: Math.max(0, leftover(des)), rh: rhUsed };
+  // Tepe seyir halkası
+  const tl = [];
+  for (let k = 0; k <= 36; k++) { const th = TAU * k / 36; tl.push({ x: top.x + Math.cos(th) * 16, y: top.y + Math.sin(th) * 16 }); }
+  roads.push({ id: "summit", name: "Tepe seyir halkası", kind: "street", width: 7, pts: tl, closed: true });
+  // Liman yolu: çevre yolundan iskelelerin dibine
+  const ha = rad(S.harbor.angle), hr = coastR(ha);
+  const quay = { x: Math.cos(ha) * (hr - 8), y: Math.sin(ha) * (hr - 8) };
+  const rq = nearestOn(roads[0].pts, quay.x, quay.y);
+  if (rq.d > 10) roads.push({ id: "port", name: "Liman yolu", kind: "street", width: 9, pts: resample([{ x: rq.x, y: rq.y }, quay], 5) });
+
+  ROADS = roads;
+  // 1) Geometri özellikleri ve ham profil  2) kavşaklar  3) ortak kavşak yükseklikleri  4) kesin profil
+  for (const r of ROADS) { geomProps(r); r.raw = solveProfile(r, new Map(), []); }
+  JUNC = mergeClose(junctions());
+  solveNodeHeights();
+  const pins = new Map(ROADS.map((r) => [r, new Map()])), jIdx = new Map(ROADS.map((r) => [r, []]));
+  for (const j of JUNC) for (const m of j.members) { pins.get(m.r).set(m.i, j.h); jIdx.get(m.r).push(m.i); }
+  for (const r of ROADS) {
+    if (r.kind === "plaza") r.pts.forEach((_, i) => pins.get(r).set(i, plazaH));
+    r.prof = solveProfile(r, pins.get(r), jIdx.get(r));
+    r.jIdx = jIdx.get(r);
+  }
+  for (const j of JUNC) j.dh = Math.max(...j.members.map((m) => Math.abs(m.r.prof.h[m.i] - j.h)));
+  for (const r of ROADS) { r.sim = [ride(r, false), ride(r, true)]; r.flow = (r.sim[0].flow + r.sim[1].flow) / 2; }
+  for (const j of JUNC) {
+    j.approach = 0;
+    for (const m of j.members) for (const sm of m.r.sim) j.approach = Math.max(j.approach, sm.free[m.i]);
+  }
+}
+
+// Aynı yol üzerinde 3 örnekten (≈15 m) yakın iki kavşak tek düğümdür (yükseklikleri çakışmasın)
+function mergeClose(list) {
+  const parent = list.map((_, i) => i), find = (i) => parent[i] === i ? i : (parent[i] = find(parent[i]));
+  const byRoad = new Map();
+  list.forEach((j, ji) => j.members.forEach((m) => { if (!byRoad.has(m.r)) byRoad.set(m.r, []); byRoad.get(m.r).push({ i: m.i, ji }); }));
+  for (const [r, arr] of byRoad) {
+    arr.sort((a, b) => a.i - b.i);
+    for (let k = 1; k < arr.length; k++) if (arr[k].i - arr[k - 1].i <= 3 && arr[k].ji !== arr[k - 1].ji) parent[find(arr[k].ji)] = find(arr[k - 1].ji);
+  }
+  const groups = new Map();
+  list.forEach((j, ji) => { const g = find(ji); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(j); });
+  const out = [];
+  for (const js of groups.values()) {
+    const j = js[0];
+    for (const o of js.slice(1)) {
+      for (const m of o.members) if (!j.members.some((q) => q.r === m.r)) j.members.push(m);
+      for (const e of o.ends) if (!j.ends.includes(e)) j.ends.push(e);
+      j.angle = Math.min(j.angle, o.angle);
+      if (o.type !== "X") j.type = o.type;
+    }
+    j.a = j.members[0].r.name; j.b = j.members.slice(1).map((m) => m.r.name).join(" + ");
+    j.roundabout = j.members.some((m) => m.r.kind === "plaza");
+    out.push(j);
+  }
+  return out;
+}
+
+// Düğüm yükseklikleri: başlangıçta yolların ham yüksekliklerinin ortalaması (meydan sabit);
+// sonra her yolda ardışık iki kavşak arasındaki fark, aradaki yolun eğim sınırıyla
+// gidilebilecek farka sığana kadar iki uç birbirine yaklaştırılır (ağ çapında gevşetme).
+function solveNodeHeights() {
+  for (const j of JUNC) {
+    j.fixed = j.members.some((m) => m.r.kind === "plaza");
+    j.h = j.fixed ? plazaH : j.members.reduce((a, m) => a + m.r.raw.h[m.i], 0) / j.members.length;
+  }
+  const seq = new Map();
+  for (const j of JUNC) for (const m of j.members) { if (!seq.has(m.r)) seq.set(m.r, []); seq.get(m.r).push({ i: m.i, j }); }
+  const gMax = S.build.maxGrade / 100, zone = S.build.fillet + FLOW.landing;
+  // İki örnek arasında çıkılabilecek en büyük fark (iniş bölgeleri ve virajlarda düşük sınır dahil)
+  const reach = (r, a, b) => {
+    let d = 0;
+    for (let i = a + 1; i <= b; i++) {
+      const R = r.R[i], c = R < 14 ? FLOW.hairpinGrade : R < 45 ? lerp(FLOW.hairpinGrade, gMax, (R - 14) / 31) : gMax;
+      const nearJ = seq.get(r).some((q) => Math.abs(r.s[i] - r.s[q.i]) < zone);
+      d += (r.s[i] - r.s[i - 1]) * (nearJ ? Math.min(c, FLOW.landingGrade) : c) * 0.97;
+    }
+    return d;
+  };
+  const pairs = [];
+  for (const [r, arr] of seq) {
+    arr.sort((a, b) => a.i - b.i);
+    for (let k = 1; k < arr.length; k++) if (arr[k].j !== arr[k - 1].j) pairs.push({ a: arr[k - 1].j, b: arr[k].j, max: reach(r, arr[k - 1].i, arr[k].i) });
+  }
+  for (let it = 0; it < 60; it++) {
+    let moved = 0;
+    for (const p of pairs) {
+      const d = p.b.h - p.a.h, ex = Math.abs(d) - p.max;
+      if (ex <= 0.001) continue;
+      const sg = Math.sign(d);
+      if (p.a.fixed && p.b.fixed) continue;
+      if (p.a.fixed) p.b.h -= sg * ex;
+      else if (p.b.fixed) p.a.h += sg * ex;
+      else { p.a.h += sg * ex / 2; p.b.h -= sg * ex / 2; }
+      moved += ex;
+    }
+    if (moved < 0.01) break;
+  }
+}
+
+// Yerel eğrilik yarıçapı, mesafe, arazi yüksekliği
+function geomProps(road) {
+  const pts = road.pts, n = pts.length, s = [0], tH = [], R = new Float32Array(n).fill(1e4);
+  for (let i = 0; i < n; i++) {
+    if (i) s.push(s[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+    tH.push(Math.max(0.4, gridH(pts[i].x, pts[i].y)));
+  }
+  for (let i = 0; i < n; i++) {
+    const a = pts[Math.max(i - 3, 0)], b = pts[i], c = pts[Math.min(i + 3, n - 1)];
+    const ab = Math.hypot(b.x - a.x, b.y - a.y), bc = Math.hypot(c.x - b.x, c.y - b.y), ca = Math.hypot(a.x - c.x, a.y - c.y);
+    const ar = Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y));
+    if (ar > 1e-6 && ab > 0.1 && bc > 0.1) R[i] = Math.min(1e4, (ab * bc * ca) / (2 * ar));
+  }
+  road.s = s; road.tH = tH; road.R = R;
+}
+
+// Profil: arazi + kavşak pinleri; yerel eğim sınırı (virajda ve kavşak yakınında düz),
+// sınırlayıcı + yumuşatma (dikey kırılmalar yumuşar), pinler sabit
+function solveProfile(road, pins, jIdx) {
+  const { s, tH, R } = road, n = s.length, gMax = S.build.maxGrade / 100, h = tH.slice(), cap = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = R[i];
+    cap[i] = r < 14 ? FLOW.hairpinGrade : r < 45 ? lerp(FLOW.hairpinGrade, gMax, (r - 14) / 31) : gMax;
+  }
+  const zone = S.build.fillet + FLOW.landing;
+  for (const j of jIdx) for (let i = 0; i < n; i++) if (Math.abs(s[i] - s[j]) < zone) cap[i] = Math.min(cap[i], FLOW.landingGrade);
+  const pinned = (i) => pins.has(i);
+  pins.forEach((v, i) => { h[i] = v; });
+  const limit = () => {
+    for (let i = 1; i < n; i++) { if (pinned(i)) continue; const d = (s[i] - s[i - 1]) * Math.min(cap[i], cap[i - 1]); h[i] = clamp(h[i], h[i - 1] - d, h[i - 1] + d); }
+    for (let i = n - 2; i >= 0; i--) { if (pinned(i)) continue; const d = (s[i + 1] - s[i]) * Math.min(cap[i], cap[i + 1]); h[i] = clamp(h[i], h[i + 1] - d, h[i + 1] + d); }
+  };
+  for (let rep = 0; rep < 4; rep++) {
+    limit(); limit();
+    for (let k = 0; k < 3; k++) { const o = h.slice(); for (let i = 1; i < n - 1; i++) if (!pinned(i)) h[i] = (o[i - 1] + 2 * o[i] + o[i + 1]) / 4; }
+  }
+  // Dikey eğriler: eğim değişimi 10 m'de en fazla FLOW.vcurve (sert tepe / çukur yok)
+  for (let it = 0; it < 80; it++) {
+    let worst = 0;
+    for (let i = 1; i < n - 1; i++) {
+      if (pinned(i)) continue;
+      const g1 = (h[i] - h[i - 1]) / Math.max(s[i] - s[i - 1], 1), g2 = (h[i + 1] - h[i]) / Math.max(s[i + 1] - s[i], 1);
+      const lim = FLOW.vcurve * (s[i + 1] - s[i - 1]) / 20;
+      const ex = Math.abs(g2 - g1) - lim;
+      if (ex > 0) { worst = Math.max(worst, ex); h[i] = lerp(h[i], (h[i - 1] + h[i + 1]) / 2, 0.6); }
+    }
+    limit();
+    if (worst < 0.002) break;
+  }
+  limit(); limit();
+  const grade = h.map((v, i) => i === 0 ? (n > 1 ? (h[1] - h[0]) / Math.max(s[1] - s[0], 1) : 0) : (v - h[i - 1]) / Math.max(s[i] - s[i - 1], 1));
+  let cut = 0, fill = 0, sumG = 0, maxG = 0, kink = 0, over = 0, minR = 1e4;
+  for (let i = 0; i < n; i++) {
+    const d = h[i] - tH[i]; if (d > fill) fill = d; if (-d > cut) cut = -d;
+    if (i) { sumG += Math.abs(grade[i]) * (s[i] - s[i - 1]); maxG = Math.max(maxG, Math.abs(grade[i])); if (Math.abs(grade[i]) > cap[i] + 0.006) over += s[i] - s[i - 1]; }
+    minR = Math.min(minR, R[i]);
+    // Dikey kırılma: 10 m içinde eğim değişimi
+    let j = i; while (j < n - 1 && s[j] - s[i] < 10) j++;
+    if (j > i) kink = Math.max(kink, Math.abs(grade[j] - grade[i]));
+  }
+  const L = s[n - 1];
+  return { s, h, tH, grade, cap, len: L, avgG: L ? sumG / L : 0, maxG, minR, cut, fill, kink, over };
+}
+
+// Kavşaklar: farklı yolların kesişmeleri ve yol ucunun başka yola değmesi (T / devam)
+function segX(a, b, c, d) {
+  const r = { x: b.x - a.x, y: b.y - a.y }, q = { x: d.x - c.x, y: d.y - c.y }, den = r.x * q.y - r.y * q.x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((c.x - a.x) * q.y - (c.y - a.y) * q.x) / den, u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / den;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return { x: a.x + r.x * t, y: a.y + r.y * t, t, u };
+}
+function bbox(pts) { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const p of pts) { a = Math.min(a, p.x); b = Math.min(b, p.y); c = Math.max(c, p.x); d = Math.max(d, p.y); } return [a, b, c, d]; }
+function junctions() {
+  const out = [], boxes = ROADS.map((r) => bbox(r.pts));
+  const add = (A, p, B, q, x, y, type) => {
+    const near = out.find((j) => Math.hypot(j.x - x, j.y - y) < 12);
+    if (near) {
+      for (const [r, i] of [[A, p], [B, q]]) if (!near.members.some((m) => m.r === r)) near.members.push({ r, i });
+      return;
+    }
+    const da = dirAt(A.pts, p), db = dirAt(B.pts, q);
+    const ang = deg(Math.acos(clamp(Math.abs(da.x * db.x + da.y * db.y), 0, 1)));
+    out.push({ x, y, type, angle: type === "C" ? 90 - ang : ang, members: [{ r: A, i: p }, { r: B, i: q }], ends: type !== "X" ? [A] : [] });
+  };
+  for (let i = 0; i < ROADS.length; i++) for (let k = i + 1; k < ROADS.length; k++) {
+    const A = ROADS[i], B = ROADS[k], ba = boxes[i], bb = boxes[k];
+    if (ba[0] > bb[2] + 2 || bb[0] > ba[2] + 2 || ba[1] > bb[3] + 2 || bb[1] > ba[3] + 2) continue;
+    for (let p = 0; p < A.pts.length - 1; p++) for (let q = 0; q < B.pts.length - 1; q++) {
+      const X = segX(A.pts[p], A.pts[p + 1], B.pts[q], B.pts[q + 1]);
+      if (X) add(A, X.t < 0.5 ? p : p + 1, B, X.u < 0.5 ? q : q + 1, X.x, X.y, "X");
+    }
+  }
+  for (const A of ROADS) {
+    if (A.closed) continue;
+    for (const end of [0, A.pts.length - 1]) {
+      const e = A.pts[end];
+      for (const B of ROADS) {
+        if (B === A) continue;
+        const q = nearestOn(B.pts, e.x, e.y);
+        if (q.d < 3) {
+          const bEnd = !B.closed && (Math.hypot(B.pts[0].x - e.x, B.pts[0].y - e.y) < 4 || Math.hypot(B.pts[B.pts.length - 1].x - e.x, B.pts[B.pts.length - 1].y - e.y) < 4);
+          const before = out.length;
+          add(A, end, B, q.i, q.x, q.y, bEnd ? "C" : "T");
+          const j = out.length > before ? out[out.length - 1] : out.find((jj) => Math.hypot(jj.x - q.x, jj.y - q.y) < 12);
+          if (j && !j.ends.includes(A)) j.ends.push(A);
+          if (j && j.type === "X") j.type = bEnd ? "C" : "T";
+        }
+      }
+    }
+  }
+  for (const j of out) { j.a = j.members[0].r.name; j.b = j.members.slice(1).map((m) => m.r.name).join(" + "); j.roundabout = j.members.some((m) => m.r.kind === "plaza"); }
+  return out;
+}
+
+// Sürüş: oyunun kaykay fiziği (eğimde g·sinθ, yuvarlanma direnci, hava sürtünmesi, 14 m/sn tavan),
+// yavaşken oyuncu iter; viraj hızı sınırı √(aLat·R); yolun bittiği kavşakta ve göbek girişinde
+// 6,5 m/sn, dörtyolda 9 m/sn; sınırlara rahat frenle (4 m/sn²) yavaşlanır.
+function ride(road, reverse) {
+  const P = road.prof, n = P.s.length, R = road.R;
+  const idx = (k) => reverse ? n - 1 - k : k;
+  const cap = new Float32Array(n);
+  for (let i = 0; i < n; i++) cap[i] = Math.min(PHYS.vmax, Math.sqrt(FLOW.aLat * R[i]));
+  for (const j of JUNC) for (const m of j.members) if (m.r === road) {
+    const ends = j.ends.includes(road) || j.roundabout && road.kind !== "plaza";
+    cap[m.i] = Math.min(cap[m.i], ends ? FLOW.jT : FLOW.jX);
+  }
+  const free = new Float32Array(n), v = new Float32Array(n), push = new Uint8Array(n), brake = new Uint8Array(n);
+  const step = (sp, i, j, withPush) => {
+    const ds = Math.abs(P.s[i] - P.s[j]), dh = P.h[i] - P.h[j];
+    const sin = dh / Math.max(Math.hypot(ds, dh), 1e-6);
+    let a = -PHYS.g * sin - PHYS.rr - PHYS.drag * sp * sp, p = 0;
+    if (withPush && sp < PHYS.pushUntil && sin > -0.02) { a += PHYS.push; p = 1; }
+    return [Math.min(Math.sqrt(Math.max(sp * sp + 2 * a * ds, 0.25)), PHYS.vmax), p];
+  };
+  let fs = 4.5, sp = 4.5;
+  free[idx(0)] = fs; v[idx(0)] = Math.min(sp, cap[idx(0)]);
+  for (let k = 1; k < n; k++) {
+    const i = idx(k), j = idx(k - 1);
+    [fs] = step(fs, i, j, true); free[i] = fs;
+    let p; [sp, p] = step(sp, i, j, true); push[i] = p;
+    if (sp > cap[i]) { sp = cap[i]; brake[i] = 1; }
+    v[i] = sp;
+  }
+  // Geriye fren geçişi: sınırlara rahat frenle yetiş
+  for (let k = n - 2; k >= 0; k--) {
+    const i = idx(k), j = idx(k + 1), ds = Math.abs(P.s[i] - P.s[j]);
+    const lim = Math.sqrt(v[j] * v[j] + 2 * FLOW.brake * ds);
+    if (v[i] > lim + 0.05) { v[i] = lim; brake[i] = 1; }
+  }
+  let t = 0, top = 0, pushL = 0, brakeL = 0;
+  for (let k = 1; k < n; k++) {
+    const i = idx(k), j = idx(k - 1), ds = Math.abs(P.s[i] - P.s[j]);
+    t += ds / Math.max((v[i] + v[j]) / 2, 0.3); top = Math.max(top, v[i]);
+    if (push[i]) pushL += ds; if (brake[i]) brakeL += ds;
+  }
+  const L = P.len || 1, pushPct = pushL / L, brakePct = brakeL / L;
+  return { v, free, push, brake, time: t, top, pushPct, brakePct, flow: clamp(100 * (1 - brakePct - 0.35 * pushPct), 0, 100) };
+}
+const simulate = (prof, reverse) => { const r = ROADS.find((q) => q.prof === prof); return r.sim[reverse ? 1 : 0]; };
+const gradeColor = (g) => { const a = Math.abs(g) * 100; return a < 3 ? css("--ok") : a < 6 ? css("--mid") : a < 9 ? css("--warn") : css("--bad"); };
+
+// ---------------------------------------------------------------------------
+// 2B harita
+// ---------------------------------------------------------------------------
+const stage = document.getElementById("stage"), map = document.getElementById("map"), mctx = map.getContext("2d");
+let view = { cx: 0, cy: 0, sc: 1 }, W = 0, H = 0, DPR = 1, selected = "serp", reverse = false;
+function fit() {
+  const r = stage.getBoundingClientRect();
+  view.sc = Math.min(r.width, r.height) / (S.size * 1.18);
+  view.cx = 0; view.cy = 0;
+}
+const toS = (x, y) => [(x - view.cx) * view.sc + W / 2, (view.cy - y) * view.sc + H / 2];
+const toW = (sx, sy) => [(sx - W / 2) / view.sc + view.cx, view.cy - (sy - H / 2) / view.sc];
+
+function resize() {
+  const r = stage.getBoundingClientRect();
+  DPR = window.devicePixelRatio || 1; W = r.width; H = r.height;
+  map.width = W * DPR; map.height = H * DPR;
+  drawMap(); drawProfile();
+  if (three.ready) three.resize();
+}
+
+function handles() {
+  const hs = [];
+  S.coast.forEach((c, k) => { const th = TAU * k / S.coast.length, r = coastR(th); hs.push({ id: "c" + k, x: Math.cos(th) * r, y: Math.sin(th) * r, kind: "coast" }); });
+  hs.push({ id: "hill", x: S.hill.x, y: S.hill.y, kind: "hill" });
+  hs.push({ id: "plaza", x: S.plaza.x, y: S.plaza.y, kind: "plaza" });
+  hs.push({ id: "harbor", x: harborPt.x, y: harborPt.y, kind: "harbor" });
+  for (const r of ROADS) if (r.kind === "avenue") {
+    hs.push({ id: "ae" + r.idx, x: r.end.x, y: r.end.y, kind: "avEnd" });
+    hs.push({ id: "am" + r.idx, x: r.pts[Math.floor(r.pts.length / 2)].x, y: r.pts[Math.floor(r.pts.length / 2)].y, kind: "avMid" });
+  }
+  hs.push({ id: "serp", x: SERP_INFO.base.x, y: SERP_INFO.base.y, kind: "serp" });
+  [S.inner.r1, S.inner.r2].slice(0, S.inner.count).forEach((r, i) => hs.push({ id: "ir" + i, x: S.plaza.x + r * Math.cos(rad(-60 - i * 18)), y: S.plaza.y + r * Math.sin(rad(-60 - i * 18)), kind: "inner" }));
+  return hs;
+}
+
+function strokePath(pts, closed) {
+  mctx.beginPath();
+  pts.forEach((p, i) => { const [x, y] = toS(p.x, p.y); i ? mctx.lineTo(x, y) : mctx.moveTo(x, y); });
+  if (closed) mctx.closePath();
+}
+
+function drawMap() {
+  if (!G) return;
+  const c = mctx;
+  c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  c.fillStyle = css("--sea"); c.fillRect(0, 0, W, H);
+  // Arazi gölgelemesi
+  const [x0, y0] = toS(-G.ext, G.ext), [x1, y1] = toS(G.ext, -G.ext);
+  c.imageSmoothingEnabled = true;
+  c.drawImage(G.img, x0, y0, x1 - x0, y1 - y0);
+  // Eş yükselti eğrileri
+  if (S.view.contours) {
+    c.strokeStyle = css("--contour");
+    for (const major of [false, true]) {
+      c.lineWidth = major ? 1.3 : 0.6; c.globalAlpha = major ? 0.85 : 0.5; c.beginPath();
+      for (const l of G.contours) { if (l[4] !== major) continue; const [a, b] = toS(l[0], l[1]), [d, e] = toS(l[2], l[3]); c.moveTo(a, b); c.lineTo(d, e); }
+      c.stroke();
+    }
+    c.globalAlpha = 1;
+  }
+  // Kıyı çizgisi
+  const coast = []; for (let k = 0; k <= 360; k++) { const th = TAU * k / 360, r = coastR(th); coast.push({ x: Math.cos(th) * r, y: Math.sin(th) * r }); }
+  strokePath(coast, true); c.strokeStyle = css("--contour"); c.lineWidth = 1.6; c.stroke();
+  // İskeleler
+  const ha = rad(S.harbor.angle), hr = coastR(ha), tx = -Math.sin(ha), ty = Math.cos(ha);
+  for (let i = 0; i < S.harbor.piers; i++) {
+    const off = (i - (S.harbor.piers - 1) / 2) * 34, bx = Math.cos(ha) * (hr - 2) + tx * off, by = Math.sin(ha) * (hr - 2) + ty * off;
+    const ex = bx + Math.cos(ha) * S.harbor.pierLen, ey = by + Math.sin(ha) * S.harbor.pierLen;
+    const [a, b] = toS(bx, by), [d, e] = toS(ex, ey);
+    c.strokeStyle = css("--pier"); c.lineWidth = Math.max(2, 8 * view.sc); c.lineCap = "butt";
+    c.beginPath(); c.moveTo(a, b); c.lineTo(d, e); c.stroke();
+  }
+  // Meydan plazası
+  const P = S.plaza, [px, py] = toS(P.x, P.y);
+  c.fillStyle = css("--plaza"); c.beginPath(); c.arc(px, py, P.r * view.sc, 0, TAU); c.fill();
+  // Yollar: kaldırım, asfalt, eğim şeridi
+  const sw = S.build.sidewalk;
+  c.lineJoin = "round"; c.lineCap = "round";
+  for (const r of ROADS) { strokePath(r.pts, r.closed); c.strokeStyle = css("--walk"); c.lineWidth = Math.max(2, (r.width + 2 * sw) * view.sc); c.stroke(); }
+  for (const r of ROADS) { strokePath(r.pts, r.closed); c.strokeStyle = css("--road"); c.lineWidth = Math.max(1.5, r.width * view.sc); c.stroke(); }
+  if (S.view.gradeColors) {
+    for (const r of ROADS) {
+      c.lineWidth = Math.max(1.2, r.width * view.sc * 0.38); c.lineCap = "butt";
+      for (let i = 1; i < r.pts.length; i++) {
+        const [a, b] = toS(r.pts[i - 1].x, r.pts[i - 1].y), [d, e] = toS(r.pts[i].x, r.pts[i].y);
+        c.strokeStyle = gradeColor(r.prof.grade[i]); c.beginPath(); c.moveTo(a, b); c.lineTo(d, e); c.stroke();
+      }
+    }
+  }
+  // Çevre yolu bariyeri (deniz tarafı) = harita sınırı
+  const ringR = ROADS[0];
+  c.setLineDash([6, 4]); c.strokeStyle = css("--accent"); c.lineWidth = 1.5;
+  c.beginPath();
+  ringR.pts.forEach((p, i) => { const th = Math.atan2(p.y, p.x), k = (S.ring.width / 2 + sw + 1) / Math.hypot(p.x, p.y) + 1; const [a, b] = toS(p.x * k, p.y * k); i ? c.lineTo(a, b) : c.moveTo(a, b); });
+  c.closePath(); c.stroke(); c.setLineDash([]);
+  // Seçili yol
+  const sel = ROADS.find((r) => r.id === selected);
+  if (sel) { strokePath(sel.pts, sel.closed); c.strokeStyle = css("--accent"); c.lineWidth = 2.5; c.globalAlpha = 0.9; c.stroke(); c.globalAlpha = 1; }
+  // Kavşaklar
+  for (const j of JUNC) {
+    const [a, b] = toS(j.x, j.y), bad = j.angle < 45 || j.dh > 0.3;
+    c.beginPath(); c.arc(a, b, Math.max(3, S.build.fillet * view.sc * 0.6), 0, TAU);
+    c.fillStyle = bad ? css("--bad") : css("--panel"); c.fill();
+    c.lineWidth = 1.2; c.strokeStyle = css("--ink"); c.stroke();
+  }
+  // Etiketler
+  c.fillStyle = css("--ink"); c.textAlign = "center"; c.font = "600 13px 'Barlow Condensed', sans-serif";
+  const lab = (t, x, y, dy = 0) => { const [a, b] = toS(x, y); c.fillText(t, a, b + dy); };
+  lab(`TEPE · ${(S.hill.height + S.terrain.base).toFixed(0)} m`, S.hill.x, S.hill.y, -26);
+  lab("MEYDAN", P.x, P.y, -(P.r + P.ringW) * view.sc - 8);
+  lab("LİMAN", harborPt.x, harborPt.y, 22);
+  if (ETEK.length) { const e = ETEK[0].pts[Math.floor(ETEK[0].pts.length * 0.3)]; c.font = "600 11px 'Barlow Condensed', sans-serif"; lab(`ETEK YOLU · ${ETEK_H.toFixed(0)} m`, e.x, e.y, -10); c.font = "600 13px 'Barlow Condensed', sans-serif"; }
+  c.fillStyle = css("--accent"); c.font = "600 12px 'Barlow Condensed', sans-serif";
+  const rp = ROADS[0].pts[Math.floor(ROADS[0].pts.length * 0.62)]; lab("ÇEVRE YOLU · SINIR", rp.x, rp.y, -12);
+  // Tutamaçlar
+  for (const h of handles()) {
+    const [a, b] = toS(h.x, h.y);
+    c.beginPath();
+    if (h.kind === "coast" || h.kind === "avEnd" || h.kind === "inner") c.rect(a - 4.5, b - 4.5, 9, 9); else c.arc(a, b, h.kind === "avMid" ? 4.5 : 7, 0, TAU);
+    c.fillStyle = h.id === drag?.id ? css("--accent") : css("--panel"); c.fill();
+    c.lineWidth = 1.8; c.strokeStyle = h.kind === "coast" ? css("--contour") : css("--accent"); c.stroke();
+  }
+  // Ölçek çubuğu
+  const m100 = 100 * view.sc;
+  c.fillStyle = css("--ink"); c.fillRect(W - 24 - m100, H - 26, m100, 3);
+  c.font = "500 11px 'IBM Plex Mono', monospace"; c.textAlign = "right"; c.fillText("100 m", W - 24, H - 32);
+}
+
+// Etkileşim: tutamaç sürükleme, kaydırma, yakınlaştırma, yol seçme
+let drag = null, pan = null, pointers = new Map(), pinch = null, dirty = 0;
+function hitHandle(sx, sy) {
+  let best = null;
+  for (const h of handles()) { const [a, b] = toS(h.x, h.y), d = Math.hypot(a - sx, b - sy); if (d < 14 && (!best || d < best.d)) best = Object.assign(h, { d }); }
+  return best;
+}
+function hitRoad(sx, sy) {
+  const [x, y] = toW(sx, sy); let best = null;
+  for (const r of ROADS) { const q = nearestOn(r.pts, x, y), d = q.d * view.sc; if (d < Math.max(10, r.width * view.sc) && (!best || d < best.d)) best = { id: r.id, d }; }
+  return best;
+}
+function applyDrag(h, x, y) {
+  if (h.kind === "coast") { const k = +h.id.slice(1); S.coast[k] = clamp(Math.hypot(x, y) / (S.size / 2), 0.45, 1.25); }
+  else if (h.kind === "hill") { S.hill.x = x; S.hill.y = y; }
+  else if (h.kind === "plaza") { S.plaza.x = x; S.plaza.y = y; }
+  else if (h.kind === "harbor") { S.harbor.angle = Math.round(deg(Math.atan2(y, x))); }
+  else if (h.kind === "avEnd") { const i = +h.id.slice(2); S.avenues.list[i].a = Math.round((deg(Math.atan2(y - S.plaza.y, x - S.plaza.x)) + 360) % 360); }
+  else if (h.kind === "avMid") {
+    const i = +h.id.slice(2), r = ROADS.find((q) => q.idx === i); if (!r) return;
+    const a = r.pts[0], b = r.pts[r.pts.length - 1], L = Math.hypot(b.x - a.x, b.y - a.y), nx = -(b.y - a.y) / L, ny = (b.x - a.x) / L;
+    const off = (x - (a.x + b.x) / 2) * nx + (y - (a.y + b.y) / 2) * ny;
+    S.avenues.list[i].b = clamp((off * 2) / (L * 0.35) / 2, -1, 1);
+  }
+  else if (h.kind === "serp") { S.serp.dir = Math.round(deg(Math.atan2(y - S.hill.y, x - S.hill.x))); }
+  else if (h.kind === "inner") { const i = +h.id.slice(2), r = Math.hypot(x - S.plaza.x, y - S.plaza.y); if (i === 0) S.inner.r1 = Math.round(r); else S.inner.r2 = Math.round(r); }
+}
+map.addEventListener("pointerdown", (e) => {
+  map.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
+  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), sc: view.sc }; drag = null; pan = null; return; }
+  const h = hitHandle(e.offsetX, e.offsetY);
+  if (h) { drag = h; return; }
+  pan = { sx: e.offsetX, sy: e.offsetY, cx: view.cx, cy: view.cy, moved: false };
+});
+map.addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
+  if (pinch && pointers.size === 2) { const [a, b] = [...pointers.values()]; view.sc = clamp(pinch.sc * Math.hypot(a[0] - b[0], a[1] - b[1]) / pinch.d, 0.15, 8); drawMap(); return; }
+  if (drag) { const [x, y] = toW(e.offsetX, e.offsetY); applyDrag(drag, x, y); schedule(drag.kind === "avEnd" || drag.kind === "avMid" || drag.kind === "serp" || drag.kind === "inner" ? "roads" : "all"); return; }
+  if (pan) { const dx = e.offsetX - pan.sx, dy = e.offsetY - pan.sy; if (Math.abs(dx) + Math.abs(dy) > 3) pan.moved = true; view.cx = pan.cx - dx / view.sc; view.cy = pan.cy + dy / view.sc; drawMap(); }
+});
+const endPtr = (e) => {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (pan && !pan.moved) { const r = hitRoad(e.offsetX, e.offsetY); if (r) select(r.id); }
+  if (drag) { drag = null; save(); renderPanel(); }
+  pan = null;
+};
+map.addEventListener("pointerup", endPtr);
+map.addEventListener("pointercancel", endPtr);
+map.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const [x, y] = toW(e.offsetX, e.offsetY);
+  view.sc = clamp(view.sc * Math.exp(-e.deltaY * 0.0015), 0.15, 8);
+  const [x2, y2] = toW(e.offsetX, e.offsetY); view.cx += x - x2; view.cy += y - y2;
+  drawMap();
+}, { passive: false });
+
+let pending = null;
+function schedule(what) {
+  if (pending === "all") what = "all";
+  pending = what;
+  if (dirty) return;
+  dirty = requestAnimationFrame(() => {
+    dirty = 0;
+    if (pending === "all") buildGrid();
+    pending = null;
+    buildRoads(); drawMap(); drawProfile(); renderStats();
+    if (three.ready && stage.classList.contains("three")) three.rebuildSoon();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Profil grafiği
+// ---------------------------------------------------------------------------
+const prof = document.getElementById("prof"), pctx = prof.getContext("2d");
+function drawProfile() {
+  const r = prof.getBoundingClientRect(); if (!r.width) return;
+  prof.width = r.width * DPR; prof.height = r.height * DPR;
+  const c = pctx; c.setTransform(DPR, 0, 0, DPR, 0, 0); c.clearRect(0, 0, r.width, r.height);
+  const road = ROADS.find((q) => q.id === selected); if (!road) return;
+  const P = road.prof, sim = simulate(P, reverse);
+  document.getElementById("ptitle").textContent =
+    `${road.name} · ${P.len.toFixed(0)} m · ort. %${(P.avgG * 100).toFixed(1)} · azami %${(P.maxG * 100).toFixed(1)} · tepe ${(sim.top * 3.6).toFixed(0)} km/s · ${sim.time.toFixed(0)} sn · akış ${sim.flow.toFixed(0)}`;
+  const L = 48, Rm = 48, T = 34, B = 22, w = r.width - L - Rm, h = r.height - T - B;
+  const hmin = Math.min(...P.h, ...P.tH) - 1, hmax = Math.max(...P.h, ...P.tH) + 2;
+  const X = (s) => L + (reverse ? 1 - s / P.len : s / P.len) * w, Y = (v) => T + h - (v - hmin) / (hmax - hmin) * h, V = (v) => T + h - (v / PHYS.vmax) * h;
+  // Izgara
+  c.strokeStyle = css("--line"); c.lineWidth = 1; c.fillStyle = css("--ink-soft"); c.font = "500 10.5px 'IBM Plex Mono', monospace";
+  const stepH = niceStep((hmax - hmin) / 4);
+  c.textAlign = "right";
+  for (let v = Math.ceil(hmin / stepH) * stepH; v <= hmax; v += stepH) { c.beginPath(); c.moveTo(L, Y(v)); c.lineTo(L + w, Y(v)); c.stroke(); c.fillText(v.toFixed(0) + " m", L - 4, Y(v) + 3); }
+  c.textAlign = "left";
+  for (const kmh of [0, 15, 30, 45]) c.fillText(kmh + " km/s", L + w + 4, V(kmh / 3.6) + 3);
+  c.textAlign = "center";
+  const stepS = niceStep(P.len / 6);
+  for (let s = 0; s <= P.len; s += stepS) c.fillText(s.toFixed(0), X(reverse ? P.len - s : s), T + h + 14);
+  // İtme (mor) ve fren (kırmızı) bölgeleri
+  for (const [arr, colr] of [[sim.push, "--accent"], [sim.brake, "--bad"]]) {
+    c.fillStyle = css(colr); c.globalAlpha = 0.11;
+    for (let i = 1; i < P.s.length; i++) if (arr[i]) { const a = X(P.s[i - 1]), b = X(P.s[i]); c.fillRect(Math.min(a, b), T, Math.abs(b - a) + 0.5, h); }
+  }
+  c.globalAlpha = 1;
+  // Kavşaklar
+  c.strokeStyle = css("--ink-soft"); c.setLineDash([2, 3]); c.lineWidth = 1;
+  for (const i of road.jIdx || []) { const x = X(P.s[i]); c.beginPath(); c.moveTo(x, T); c.lineTo(x, T + h); c.stroke(); }
+  c.setLineDash([]);
+  // Arazi (ince) ve yol (eğim renkli)
+  c.beginPath(); P.tH.forEach((v, i) => { const x = X(P.s[i]), y = Y(v); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+  c.strokeStyle = css("--contour"); c.setLineDash([3, 3]); c.lineWidth = 1; c.stroke(); c.setLineDash([]);
+  c.lineWidth = 3;
+  for (let i = 1; i < P.s.length; i++) { c.strokeStyle = gradeColor(P.grade[i]); c.beginPath(); c.moveTo(X(P.s[i - 1]), Y(P.h[i - 1])); c.lineTo(X(P.s[i]), Y(P.h[i])); c.stroke(); }
+  // Hız: ince = serbest kayış (fren yok), kalın = sürüş (viraj / kavşak sınırlarına frenle)
+  c.beginPath(); for (let i = 0; i < P.s.length; i++) { const x = X(P.s[i]), y = V(sim.free[i]); i ? c.lineTo(x, y) : c.moveTo(x, y); }
+  c.strokeStyle = css("--accent"); c.lineWidth = 0.8; c.globalAlpha = 0.6; c.stroke(); c.globalAlpha = 1;
+  c.beginPath(); for (let i = 0; i < P.s.length; i++) { const x = X(P.s[i]), y = V(sim.v[i]); i ? c.lineTo(x, y) : c.moveTo(x, y); }
+  c.strokeStyle = css("--accent"); c.lineWidth = 2; c.stroke();
+  c.fillStyle = css("--ink-soft"); c.textAlign = "left"; c.font = "500 10.5px 'IBM Plex Sans', sans-serif";
+  c.fillText("— yol (eğim renginde)  - - arazi  — hız (ince: serbest kayış)  ▒ mor: itme  ▒ kırmızı: fren  ┆ kavşak", L, T - 6);
+}
+function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1e-6)))), m = x / p; return (m < 1.5 ? 1 : m < 3 ? 2 : m < 7 ? 5 : 10) * p; }
+
+// ---------------------------------------------------------------------------
+// Panel
+// ---------------------------------------------------------------------------
+const SECTIONS = [
+  ["Ada", [["size", "Çap", 700, 1300, 10, "m"], ["rough", "Kıyı pürüzü", 0, 1, 0.05, ""], ["terrain.beach", "Plaj genişliği", 8, 50, 1, "m"],
+    ["terrain.base", "İç kesim yüksekliği", 1, 10, 0.5, "m"], ["terrain.roll", "Engebe", 0, 8, 0.5, "m"], ["seed", "Engebe deseni", 1, 40, 1, ""]]],
+  ["Tepe", [["hill.height", "Yükseklik", 20, 110, 1, "m"], ["hill.radius", "Yarıçap", 120, 330, 5, "m"], ["hill.steep", "Tepe sivriliği", 0.6, 2.6, 0.05, ""],
+    ["hill.foot", "Etek yolu yükseltisi (meydana göre)", 3, 25, 1, "m"]]],
+  ["Serpantin", [["serp.grade", "Hedef iniş eğimi", 3.5, 9, 0.1, "%"], ["serp.hairpin", "Dönemeç yarıçapı", 8, 30, 1, "m"], ["serp.spread", "Kolların en geniş açısı", 25, 85, 1, "°"], ["serp.width", "Yol genişliği", 6, 12, 0.5, "m"]]],
+  ["Meydan", [["plaza.r", "Plaza yarıçapı", 14, 50, 1, "m"], ["plaza.ringW", "Göbek yolu genişliği", 7, 16, 0.5, "m"]]],
+  ["Liman", [["harbor.depth", "Koy derinliği", 10, 90, 1, "m"], ["harbor.width", "Koy genişliği", 5, 30, 1, "°"], ["harbor.piers", "İskele sayısı", 1, 4, 1, ""], ["harbor.pierLen", "İskele boyu", 15, 90, 1, "m"]]],
+  ["Çevre yolu", [["ring.inset", "Kıyıdan uzaklık", 10, 70, 1, "m"], ["ring.width", "Genişlik", 9, 18, 0.5, "m"]]],
+  ["Caddeler", [["avenues.count", "Cadde sayısı", 2, 9, 1, ""], ["avenues.width", "Cadde genişliği", 7, 16, 0.5, "m"], ["inner.count", "İç halka sayısı", 0, 2, 1, ""],
+    ["inner.r1", "1. halka yarıçapı", 50, 320, 5, "m"], ["inner.r2", "2. halka yarıçapı", 80, 420, 5, "m"], ["inner.width", "Halka sokak genişliği", 6, 12, 0.5, "m"]]],
+  ["Yol yapımı", [["build.maxGrade", "Azami eğim", 4, 16, 0.5, "%"], ["build.fillet", "Kavşak köşe yarıçapı", 3, 20, 1, "m"], ["build.sidewalk", "Kaldırım", 1.5, 5, 0.5, "m"], ["build.curb", "Bordür yüksekliği", 0.08, 0.25, 0.01, "m"]]],
+];
+const getP = (k) => k === "avenues.count" ? S.avenues.list.length : k.split(".").reduce((o, p) => o[p], S);
+function setP(k, v) {
+  if (k === "avenues.count") {
+    const L = S.avenues.list; v = Math.round(v);
+    while (L.length < v) { const used = L.map((a) => a.a); let best = 0, bestGap = -1; for (let a = 0; a < 360; a += 5) { const gap = Math.min(...used.map((u) => Math.abs(angDiff(rad(a), rad(u))))); if (gap > bestGap) { bestGap = gap; best = a; } } L.push({ a: best, b: 0 }); }
+    while (L.length > v) L.pop();
+    return;
+  }
+  const ks = k.split("."), last = ks.pop(); ks.reduce((o, p) => o[p], S)[last] = v;
+}
+const TERRAIN_KEYS = /^(size|rough|seed|terrain|hill\.(height|radius|steep)|plaza|harbor\.(depth|width))/;
+const SERP_NOTE = () => `Yamaca göre tasarlandı: <b>${SERP_INFO.legs}</b> kol, ±${SERP_INFO.spread.toFixed(0)}° açı${SERP_INFO.widened ? " (düşüş için genişletildi)" : ""}, dönemeç ${SERP_INFO.rh} m${SERP_INFO.rh !== S.serp.hairpin ? " (sığması için ayarlandı)" : ""} · ${SERP_INFO.drop.toFixed(0)} m düşüş için ${SERP_INFO.want.toFixed(0)} m yol gerekir.` +
+  (SERP_INFO.short > 2 ? ` <b>${SERP_INFO.short.toFixed(0)} m düşüş sığmadı</b>: hedef eğimi artır, dönemeç yarıçapını küçült ya da tepeyi alçalt.` : "") +
+  ` Dönemeçler neredeyse düz (%3); dönemeçte rahat dönüş hızı ${(Math.sqrt(FLOW.aLat * S.serp.hairpin) * 3.6).toFixed(0)} km/s.`;
+function renderPanel() {
+  const panel = document.getElementById("panel");
+  let html = "";
+  for (const [title, rows] of SECTIONS) {
+    html += `<section><h2>${title}</h2>`;
+    for (const [k, label, mn, mx, st, unit] of rows) {
+      const id = "s_" + k.replace(/\./g, "_"), v = getP(k);
+      html += `<div class="row"><label for="${id}">${label}</label><output id="o_${id}">${fmt(v, st)}${unit}</output><input type="range" id="${id}" data-k="${k}" data-u="${unit}" data-st="${st}" min="${mn}" max="${mx}" step="${st}" value="${v}"></div>`;
+    }
+    if (title === "Serpantin") html += `<p class="note" id="serpNote"></p>`;
+    if (title === "Tepe") html += `<label class="chk"><input type="checkbox" id="cEtek" ${S.hill.etek ? "checked" : ""}> Etek yolu (tepenin eteğini dolaşır, caddeleri bağlar)</label>`;
+    html += `</section>`;
+  }
+  html += `<section><h2>Görünüm</h2>
+    <label class="chk"><input type="checkbox" id="cGrade" ${S.view.gradeColors ? "checked" : ""}> Yolları eğime göre renklendir</label>
+    <label class="chk"><input type="checkbox" id="cCont" ${S.view.contours ? "checked" : ""}> Eş yükselti eğrileri (5 m, kalın 25 m)</label></section>`;
+  html += `<section><h2>Yollar</h2><div style="overflow-x:auto"><table><thead><tr><th>Yol</th><th>Boy</th><th>Ort.</th><th>Azami</th><th>Viraj R</th><th>Akış</th></tr></thead><tbody id="roadRows"></tbody></table></div>
+    <p class="note" id="islandNote"></p></section>`;
+  html += `<section><h2>Kavşaklar</h2><div id="juncInfo"></div></section>`;
+  html += `<section><h2>Karar</h2>
+    <div class="actions"><button class="primary" id="saveBtn" disabled>Planı kaydet</button><button id="copyBtn">Değerleri kopyala</button><button id="resetBtn">Eskize dön</button></div>
+    <div class="status" id="saveStatus">Kayıt hazırlanıyor…</div>
+    <p class="note">Kaydettiğin plan 3B modellemenin girdisi olur: aynı kıyı, tepe, meydan, liman ve yol ağı Blender'da ve oyunda birebir kurulur.</p></section>`;
+  panel.innerHTML = html;
+  panel.querySelectorAll("input[type=range]").forEach((el) => el.addEventListener("input", () => {
+    const k = el.dataset.k, v = +el.value; setP(k, v);
+    document.getElementById("o_" + el.id).textContent = fmt(v, +el.dataset.st) + el.dataset.u;
+    schedule(TERRAIN_KEYS.test(k) ? "all" : "roads"); save();
+  }));
+  document.getElementById("cGrade").addEventListener("change", (e) => { S.view.gradeColors = e.target.checked; drawMap(); save(); });
+  document.getElementById("cCont").addEventListener("change", (e) => { S.view.contours = e.target.checked; drawMap(); save(); });
+  document.getElementById("copyBtn").addEventListener("click", copyJSON);
+  document.getElementById("resetBtn").addEventListener("click", () => { S = clone(DEFAULTS); renderPanel(); schedule("all"); save(); fit(); });
+  document.getElementById("cEtek").addEventListener("change", (e) => { S.hill.etek = e.target.checked; schedule("roads"); save(); });
+  document.getElementById("saveBtn").addEventListener("click", saveDb);
+  wireDb();
+  renderStats();
+}
+const fmt = (v, st) => st < 0.1 ? (+v).toFixed(2) : st < 1 ? (+v).toFixed(1) : (+v).toFixed(0);
+
+function renderStats() {
+  const tb = document.getElementById("roadRows"); if (!tb) return;
+  tb.innerHTML = ROADS.map((r) => {
+    const P = r.prof, c = gradeColor(P.maxG);
+    const rad_ = P.minR > 900 ? "düz" : P.minR.toFixed(0) + " m";
+    const fc = r.flow >= 85 ? css("--ok") : r.flow >= 70 ? css("--mid") : r.flow >= 55 ? css("--warn") : css("--bad");
+    return `<tr class="${r.id === selected ? "sel" : ""}" data-id="${r.id}" title="Yarma ${P.cut.toFixed(1)} m · dolgu ${P.fill.toFixed(1)} m · kırılma %${(P.kink * 100).toFixed(1)}/10 m"><td>${r.name}</td><td>${P.len.toFixed(0)}</td><td>%${(P.avgG * 100).toFixed(1)}</td><td><span class="pill" style="background:${c}">%${(P.maxG * 100).toFixed(1)}</span></td><td>${rad_}</td><td><span class="pill" style="background:${fc}">${r.flow.toFixed(0)}</span></td></tr>`;
+  }).join("");
+  tb.querySelectorAll("tr").forEach((tr) => tr.addEventListener("click", () => select(tr.dataset.id)));
+  // Ada özeti
+  let area = 0, per = 0, prev = null;
+  for (let k = 0; k <= 360; k++) { const th = TAU * k / 360, r = coastR(th), p = { x: Math.cos(th) * r, y: Math.sin(th) * r }; if (prev) { area += (prev.x * p.y - p.x * prev.y) / 2; per += Math.hypot(p.x - prev.x, p.y - prev.y); } prev = p; }
+  const ring = ROADS[0], lap = ring.sim[0], total = ROADS.reduce((a, r) => a + r.prof.len, 0);
+  const serp = ROADS.find((r) => r.id === "serp"), sd = serp.sim[0];
+  const flowAvg = ROADS.reduce((a, r) => a + r.flow * r.prof.len, 0) / Math.max(total, 1);
+  document.getElementById("islandNote").innerHTML =
+    `Ada alanı <b>${(area / 1e6).toFixed(2)} km²</b> · kıyı ${(per / 1000).toFixed(2)} km · yol ağı ${(total / 1000).toFixed(2)} km · ağın akış puanı <b>${flowAvg.toFixed(0)}</b>/100.<br>` +
+    `Çevre yolu turu ≈ <b>${(lap.time / 60).toFixed(1)} dk</b> (yolun %${(lap.pushPct * 100).toFixed(0)}'inde itme).<br>` +
+    `Serpantin inişi: <b>${serp.prof.len.toFixed(0)} m</b>, ${sd.time.toFixed(0)} sn, tepe hız ${(sd.top * 3.6).toFixed(0)} km/s, frenli yol %${(sd.brakePct * 100).toFixed(0)}.<br>` +
+    `<span style="opacity:.8">Akış = 100 − fren yapılan yol % − 0,35 × itilen yol % (iki yönün ortalaması).</span>`;
+  const sn = document.getElementById("serpNote"); if (sn) sn.innerHTML = SERP_NOTE();
+  const ji = document.getElementById("juncInfo");
+  const issues = [];
+  for (const j of JUNC) {
+    const msg = [];
+    if (j.angle < 45) msg.push(j.type === "C" ? `sert kırılma ${(90 - j.angle).toFixed(0)}°` : `dar açı ${j.angle.toFixed(0)}°`);
+    if (j.dh > 0.3) msg.push(`yükseklik farkı ${j.dh.toFixed(1)} m`);
+    if (msg.length) issues.push(`${j.a} × ${j.b}: ${msg.join(", ")}`);
+  }
+  for (const r of ROADS) {
+    if (r.prof.over > 8) issues.push(`${r.name}: ${r.prof.over.toFixed(0)} m boyunca eğim sınırı aşılıyor (kavşaklar arası yükseklik farkı fazla)`);
+    if (r.prof.kink > 0.06) issues.push(`${r.name}: sert dikey kırılma (%${(r.prof.kink * 100).toFixed(0)} / 10 m)`);
+  }
+  const fast = JUNC.filter((j) => j.approach > 9.5).sort((a, b) => b.approach - a.approach);
+  const types = { X: 0, T: 0, C: 0 }; JUNC.forEach((j) => types[j.type]++);
+  ji.innerHTML = `<p class="note"><b>${JUNC.length}</b> kavşak · ${JUNC.filter((j) => j.roundabout).length} göbek girişi · ${types.T} T · ${types.X} dörtyol · ${types.C} devam. Kavşakta yollar aynı yükseklikte buluşur; iki yanında ${S.build.fillet + FLOW.landing} m'lik %3 altı düzlük vardır. Köşeler ${S.build.fillet} m yarıçapla yuvarlanır.</p>` +
+    (issues.length ? `<ul class="warnlist">${issues.slice(0, 10).map((t) => `<li>${t}</li>`).join("")}</ul>` : `<p class="note">Sorunlu kavşak yok.</p>`) +
+    (fast.length ? `<p class="note">Fren gerektiren girişler (serbest kayışla gelinen hız → kavşak hızı):</p><ul class="warnlist">${fast.slice(0, 6).map((j) => `<li>${j.a} × ${j.b}: ${(j.approach * 3.6).toFixed(0)} → ${(FLOW.jT * 3.6).toFixed(0)} km/s</li>`).join("")}</ul>` : "");
+}
+
+function select(id) {
+  selected = id; drawMap(); drawProfile(); renderStats();
+  if (three.ready) three.markSelected();
+}
+document.getElementById("dirF").addEventListener("click", () => setDir(false));
+document.getElementById("dirB").addEventListener("click", () => setDir(true));
+function setDir(b) {
+  reverse = b;
+  document.getElementById("dirF").classList.toggle("on", !b); document.getElementById("dirF").setAttribute("aria-pressed", String(!b));
+  document.getElementById("dirB").classList.toggle("on", b); document.getElementById("dirB").setAttribute("aria-pressed", String(b));
+  drawProfile();
+}
+document.getElementById("fit").addEventListener("click", () => { fit(); drawMap(); if (three.ready) three.home(); });
+
+// ---------------------------------------------------------------------------
+// Kaydetme
+// ---------------------------------------------------------------------------
+function save() { draftT = Date.now(); try { localStorage.setItem("ada-plani-taslak2", JSON.stringify({ t: draftT, plan: S })); } catch (e) {} }
+function summary() {
+  return {
+    roads: ROADS.map((r) => ({ id: r.id, name: r.name, kind: r.kind, width: r.width, length: Math.round(r.prof.len), maxGradePct: +(r.prof.maxG * 100).toFixed(1), avgGradePct: +(r.prof.avgG * 100).toFixed(1), minRadius: Math.round(Math.min(r.prof.minR, 9999)), flow: Math.round(r.flow) })),
+    junctions: JUNC.length,
+    badJunctions: JUNC.filter((j) => j.angle < 45 || j.dh > 0.3).map((j) => `${j.a} x ${j.b}`),
+    serpentine: { legs: SERP_INFO.legs, spreadDeg: Math.round(SERP_INFO.spread), drop: Math.round(SERP_INFO.drop) },
+  };
+}
+async function copyJSON() {
+  const txt = JSON.stringify({ plan: S, summary: summary() }, null, 1);
+  const st = document.getElementById("saveStatus");
+  try { await navigator.clipboard.writeText(txt); st.textContent = "Değerler panoya kopyalandı."; }
+  catch (e) { const ta = document.createElement("textarea"); ta.value = txt; ta.style.width = "100%"; ta.rows = 6; st.replaceChildren(ta); ta.select(); }
+}
+let DB = null;
+function wireDb() {
+  const btn = document.getElementById("saveBtn"), st = document.getElementById("saveStatus");
+  if (DB) { btn.disabled = false; st.textContent = st.dataset.last || "Kaydetmeye hazır."; return; }
+  if (DB === false) { st.textContent = "Bu görünümde kayıt yok; değerleri kopyalayıp gönderebilirsin."; }
+}
+(async () => {
+  let db = null;
+  try { db = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch (e) { db = null; }
+  DB = db || false;
+  const st = document.getElementById("saveStatus");
+  if (!db) { wireDb(); return; }
+  try {
+    const snap = await db.doc("plans/current").get();
+    if (snap.exists) {
+      const d = snap.data();
+      st.dataset.last = "Son kayıt: " + new Date(d.savedAt).toLocaleString("tr-TR");
+      // Kayıtlı plan bu tarayıcıdaki taslaktan yeniyse onu aç (ör. Claude'un düzelttiği plan)
+      if (d.plan && (d.savedAt || 0) > draftT) { S = merge(DEFAULTS, migrate(d.plan)); renderPanel(); schedule("all"); }
+    }
+  } catch (e) {}
+  wireDb();
+})();
+async function saveDb() {
+  const st = document.getElementById("saveStatus"), btn = document.getElementById("saveBtn");
+  if (!DB) return;
+  btn.disabled = true; st.textContent = "Kaydediliyor…";
+  try {
+    await DB.doc("plans/current").set({ plan: clone(S), summary: summary(), savedAt: Date.now() });
+    st.dataset.last = "Kaydedildi: " + new Date().toLocaleString("tr-TR");
+    st.textContent = st.dataset.last + " · 3B modellemeye hazır.";
+  } catch (e) {
+    st.textContent = e && e.code === "invalid_argument" ? "Bu planı kaydetme iznin yok; değerleri kopyalayıp gönderebilirsin." : "Kaydedilemedi, birazdan tekrar dene.";
+  }
+  btn.disabled = false;
+}
+
+// ---------------------------------------------------------------------------
+// 3B görünüm ve sürüş (three.js isteğe bağlı yüklenir)
+// ---------------------------------------------------------------------------
+const three = { ready: false, loading: false };
+function loadScript(src) { return new Promise((ok, no) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = no; document.head.appendChild(s); }); }
+async function show3D(on) {
+  stage.classList.toggle("three", on);
+  document.getElementById("v2").classList.toggle("on", !on); document.getElementById("v2").setAttribute("aria-pressed", String(!on));
+  document.getElementById("v3").classList.toggle("on", on); document.getElementById("v3").setAttribute("aria-pressed", String(on));
+  document.getElementById("ride").hidden = !on;
+  document.getElementById("legend").hidden = on;
+  if (!on) { three.stopRide && three.stopRide(); resize(); return; }
+  if (!three.ready && !three.loading) {
+    three.loading = true;
+    try {
+      await loadScript("https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js");
+      await loadScript("https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js");
+      init3D();
+    } catch (e) { document.getElementById("hud").hidden = false; document.getElementById("hud").textContent = "3B kütüphanesi yüklenemedi."; }
+    three.loading = false;
+  } else if (three.ready) { three.resize(); three.rebuild(); }
+}
+document.getElementById("v2").addEventListener("click", () => show3D(false));
+document.getElementById("v3").addEventListener("click", () => show3D(true));
+
+function init3D() {
+  const T = window.THREE, cv = document.getElementById("gl");
+  const renderer = new T.WebGLRenderer({ canvas: cv, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const scene = new T.Scene();
+  const cam = new T.PerspectiveCamera(55, 1, 0.5, 6000);
+  const ctl = new T.OrbitControls(cam, cv);
+  ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI * 0.49;
+  scene.add(new T.HemisphereLight(0xdfefff, 0x6b5a3a, 0.75));
+  const sun = new T.DirectionalLight(0xfff1d6, 0.85); sun.position.set(-300, 400, -250); scene.add(sun);
+  let world = new T.Group(); scene.add(world);
+  let selMesh = null, rider = null, ride = null, rebuildTimer = 0;
+  const col = (n) => new T.Color(css(n));
+
+  function rebuild() {
+    scene.remove(world); world.traverse((o) => { o.geometry && o.geometry.dispose(); });
+    world = new T.Group(); scene.add(world);
+    scene.background = col("--sea-deep");
+    // Arazi
+    const N = 160, ext = G.ext, geo = new T.PlaneGeometry(2 * ext, 2 * ext, N, N);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position, colors = [];
+    const sand = col("--land"), grass = new T.Color(0x7fa35a), forest = new T.Color(0x5b7d45), rock = new T.Color(0x9a8f7c), seab = col("--sea");
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i), y = gridH(x, -z), s = inland(x, -z);
+      pos.setY(i, y);
+      let c;
+      if (s < 0) c = seab.clone();
+      else if (s < S.terrain.beach) c = sand.clone();
+      else { const sl = Math.abs(gridH(x + 6, -z) - gridH(x - 6, -z)) + Math.abs(gridH(x, -z + 6) - gridH(x, -z - 6)); c = (sl > 4 ? rock : y > 25 ? forest : grass).clone(); }
+      colors.push(c.r, c.g, c.b);
+    }
+    geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    world.add(new T.Mesh(geo, new T.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+    // Deniz
+    const sea = new T.Mesh(new T.PlaneGeometry(ext * 6, ext * 6), new T.MeshLambertMaterial({ color: col("--sea"), transparent: true, opacity: 0.85 }));
+    sea.rotation.x = -Math.PI / 2; sea.position.y = 0.05; world.add(sea);
+    // Yollar: kaldırım + asfalt şeritleri
+    const ribbon = (road, w, yoff, color) => {
+      const pts = road.pts, P = road.prof, v = [], idx = [];
+      for (let i = 0; i < pts.length; i++) {
+        const d = dirAt(pts, i), nx = -d.y, ny = d.x, y = P.h[i] + yoff;
+        v.push(pts[i].x + nx * w / 2, y, -(pts[i].y + ny * w / 2), pts[i].x - nx * w / 2, y, -(pts[i].y - ny * w / 2));
+        if (i) { const a = (i - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      }
+      const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(v, 3)); g.setIndex(idx); g.computeVertexNormals();
+      const m = new T.Mesh(g, new T.MeshLambertMaterial({ color, side: T.DoubleSide })); world.add(m); return m;
+    };
+    for (const r of ROADS) {
+      ribbon(r, r.width + 2 * S.build.sidewalk, 0.25 + S.build.curb, col("--walk"));
+      ribbon(r, r.width, 0.32 + S.build.curb * 0.2, col("--road"));
+    }
+    // Meydan plazası
+    const pz = new T.Mesh(new T.CylinderGeometry(S.plaza.r, S.plaza.r, 0.6, 40), new T.MeshLambertMaterial({ color: col("--plaza") }));
+    pz.position.set(S.plaza.x, plazaH + 0.2, -S.plaza.y); world.add(pz);
+    // İskeleler
+    const ha = rad(S.harbor.angle), hr = coastR(ha), tx = -Math.sin(ha), ty = Math.cos(ha);
+    for (let i = 0; i < S.harbor.piers; i++) {
+      const off = (i - (S.harbor.piers - 1) / 2) * 34, L = S.harbor.pierLen;
+      const cx = Math.cos(ha) * (hr - 2 + L / 2) + tx * off, cy = Math.sin(ha) * (hr - 2 + L / 2) + ty * off;
+      const b = new T.Mesh(new T.BoxGeometry(L, 1, 8), new T.MeshLambertMaterial({ color: col("--pier") }));
+      b.position.set(cx, 1.4, -cy); b.rotation.y = ha; world.add(b);
+    }
+    // Çevre yolu bariyeri (harita sınırı)
+    const ring = ROADS[0], bv = [], bi = [];
+    ring.pts.forEach((p, i) => {
+      const k = (S.ring.width / 2 + S.build.sidewalk + 0.5) / Math.hypot(p.x, p.y) + 1, y = ring.prof.h[i] + 0.3;
+      bv.push(p.x * k, y, -p.y * k, p.x * k, y + 1.1, -p.y * k);
+      if (i) { const a = (i - 1) * 2; bi.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    });
+    const bg = new T.BufferGeometry(); bg.setAttribute("position", new T.Float32BufferAttribute(bv, 3)); bg.setIndex(bi); bg.computeVertexNormals();
+    world.add(new T.Mesh(bg, new T.MeshLambertMaterial({ color: 0xc7ccd1, side: T.DoubleSide })));
+    selMesh = null; markSelected();
+    rider = new T.Mesh(new T.ConeGeometry(1.2, 3, 8), new T.MeshLambertMaterial({ color: col("--accent") }));
+    rider.visible = false; world.add(rider);
+  }
+  function markSelected() {
+    if (selMesh) { world.remove(selMesh); selMesh.geometry.dispose(); selMesh = null; }
+    const r = ROADS.find((q) => q.id === selected); if (!r) return;
+    const pts = r.pts.map((p, i) => new T.Vector3(p.x, r.prof.h[i] + 1.2, -p.y));
+    selMesh = new T.Line(new T.BufferGeometry().setFromPoints(pts), new T.LineBasicMaterial({ color: col("--accent") }));
+    world.add(selMesh);
+  }
+  function home() { cam.position.set(0, S.size * 0.7, S.size * 0.75); ctl.target.set(S.plaza.x * 0.3, 0, -S.plaza.y * 0.3); ctl.update(); }
+  function resize() { const r = stage.getBoundingClientRect(); renderer.setSize(r.width, r.height, false); cam.aspect = r.width / Math.max(r.height, 1); cam.updateProjectionMatrix(); }
+  const hud = document.getElementById("hud");
+  function startRide() {
+    const r = ROADS.find((q) => q.id === selected); if (!r) return;
+    const sim = r.sim[reverse ? 1 : 0], n = r.pts.length;
+    ride = { r, sim, i: 0, f: 0, n }; rider.visible = true; ctl.enabled = false; hud.hidden = false;
+    document.getElementById("ride").textContent = "Dur ■";
+  }
+  function stopRide() { ride = null; if (rider) rider.visible = false; ctl.enabled = true; hud.hidden = true; document.getElementById("ride").textContent = "Sür ▶"; }
+  document.getElementById("ride").addEventListener("click", () => ride ? stopRide() : startRide());
+  let last = performance.now();
+  function tick(now) {
+    const dt = Math.min((now - last) / 1000, 0.05); last = now;
+    if (ride) {
+      const { r, sim } = ride, n = ride.n, P = r.prof;
+      const k = (q) => reverse ? n - 1 - q : q;
+      let i0 = k(ride.i), i1 = k(Math.min(ride.i + 1, n - 1));
+      const v = lerp(sim.v[i0], sim.v[i1], ride.f);
+      let adv = v * dt;
+      while (adv > 0 && ride.i < n - 1) {
+        i0 = k(ride.i); i1 = k(ride.i + 1);
+        const seg = Math.abs(P.s[i1] - P.s[i0]) || 0.01, rem = (1 - ride.f) * seg;
+        if (adv < rem) { ride.f += adv / seg; adv = 0; } else { adv -= rem; ride.i++; ride.f = 0; }
+      }
+      if (ride.i >= n - 1) { stopRide(); }
+      else {
+        i0 = k(ride.i); i1 = k(ride.i + 1);
+        const a = r.pts[i0], b = r.pts[i1], x = lerp(a.x, b.x, ride.f), y = lerp(a.y, b.y, ride.f), h = lerp(P.h[i0], P.h[i1], ride.f);
+        const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+        rider.position.set(x, h + 1.8, -y);
+        const back = 7, up = 3.2;
+        cam.position.lerp(new T.Vector3(x - dx / L * back, h + up, -(y - dy / L * back)), 0.12);
+        cam.lookAt(x + dx / L * 6, h + 1.2, -(y + dy / L * 6));
+        const g = P.grade[i1] * (reverse ? -1 : 1);
+        hud.innerHTML = `<b>${(v * 3.6).toFixed(0)}</b> km/s<br>eğim ${g < 0 ? "iniş" : "çıkış"} %${Math.abs(g * 100).toFixed(1)}<br>${sim.brake[i1] ? "fren" : sim.push[i1] ? "itiyor" : "kayıyor"} · ${(P.s[i1] / 1).toFixed(0)} m`;
+      }
+    } else ctl.update();
+    renderer.render(scene, cam);
+    requestAnimationFrame(tick);
+  }
+  Object.assign(three, {
+    ready: true, resize, rebuild, markSelected, home, stopRide,
+    rebuildSoon() { clearTimeout(rebuildTimer); rebuildTimer = setTimeout(() => { stopRide(); rebuild(); }, 250); },
+  });
+  resize(); rebuild(); home(); requestAnimationFrame(tick);
+}
+
+// ---------------------------------------------------------------------------
+buildGrid(); buildRoads();
+renderPanel();
+window.addEventListener("resize", resize);
+requestAnimationFrame(() => { fit(); resize(); });
+</script>

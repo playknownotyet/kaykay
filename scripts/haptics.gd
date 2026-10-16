@@ -12,7 +12,7 @@ static var instance: Haptics
 
 @export var enabled := true
 ## Genel titreşim gücü çarpanı
-@export var strength := 1.0
+@export var strength := 2.0
 ## En kısa darbe süresi (ms)
 @export var min_pulse_ms := 12.0
 ## Saniyedeki en fazla darbe

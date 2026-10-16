@@ -14,6 +14,8 @@ const TouchControlsScript := preload("res://scripts/ui/touch_controls.gd")
 const HudScript := preload("res://scripts/ui/hud.gd")
 const SpeedFxScript := preload("res://scripts/speed_fx.gd")
 const LookManagerScript := preload("res://scripts/look_manager.gd")
+## Oyunun adası (tools/ada/ada_bake.gd ile hazırlanır). Yoksa eski gri kutu test pisti açılır.
+const ADA_SCENE := "res://scenes/ada.scn"
 
 var player: SkateController
 var camera: Camera3D
@@ -25,21 +27,28 @@ var sun: DirectionalLight3D
 var world: SubViewport
 var _world_view: TextureRect
 var _pixel_size := 1.0
+## false: eski test pisti (otomatik testler bunu kullanır)
+var use_island := true
 
 
 func _ready() -> void:
 	_setup_performance()
 	_build_world_view()
 
-	# Sahnedeki pisti sanal ekrana taşı
-	var level := $Level
+	# Ada (ya da eski test pisti) sanal ekrana
+	var level: Node3D = $Level
 	remove_child(level)
+	if use_island and ResourceLoader.exists(ADA_SCENE):
+		level.free()
+		level = load(ADA_SCENE).instantiate()
 	world.add_child(level)
 
 	_build_environment()
 
 	player = SkateControllerScript.new()
 	player.name = "Player"
+	if level.has_meta("spawn"):
+		player.transform = level.get_meta("spawn")   # "Başa dön" de buraya döner
 	world.add_child(player)
 	var visual := Node3D.new()
 	visual.name = "Visual"
@@ -82,7 +91,19 @@ func _ready() -> void:
 	crowd.player = player
 	crowd.camera = camera
 	crowd.look = look
+	crowd.walk_source = level
 	world.add_child(crowd)
+
+	# Araba trafiği (adanın şerit ağı; eski test pistinde araba yok)
+	var traffic := Trafik.new()
+	traffic.name = "Trafik"
+	traffic.player = player
+	traffic.camera = camera
+	traffic.crowd = crowd
+	traffic.look = look
+	if not (use_island and level.has_meta("walk_cross")):
+		traffic.count = 0
+	world.add_child(traffic)
 
 	var ui := CanvasLayer.new()
 	ui.layer = 2

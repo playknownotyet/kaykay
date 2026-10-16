@@ -14,6 +14,7 @@ var _held := {}
 func _ready() -> void:
 	shots = "--screenshot" in OS.get_cmdline_user_args()
 	main = load("res://scenes/main.tscn").instantiate()
+	main.use_island = false   # bu test eski pistteki rampa / ray konumlarına göre yazıldı
 	add_child(main)
 	p = main.player
 	await _run()

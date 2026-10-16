@@ -21,7 +21,7 @@ const BASE := {
 	"sun_energy": 1.15,
 	"shadow_opacity": 1.0,
 	"fog_color": Color(0.75, 0.87, 1.0),
-	"fog_density": 0.004,
+	"fog_density": 0.0014,
 	"exposure": 1.0,
 	"brightness": 1.0,
 	"contrast": 1.0,
@@ -56,7 +56,7 @@ const BASE := {
 
 # Retro 32-bit temeli: düşük çözünürlük (piksel), 24 kademe renk + dither,
 # piksel ızgarasına oturan titrek poligonlar (vertex snap) ve renkli uzak sis.
-const RETRO_POST := {"pixel_size": 3.0, "posterize": 24.0, "dither": 0.6}
+const RETRO_POST := {"pixel_size": 2.5, "posterize": 24.0, "dither": 0.6}
 
 # Şeker paleti: koyu çivit -> mor -> mercan -> şeftali -> krem.
 # Gölgeler hiçbir zaman siyaha düşmez, morumsu kalır: tatlı ama karakterli.
@@ -67,12 +67,12 @@ const PRESETS := [
 	# Seçilen yön (2026-10-14): düz retro. Kontrast vb. oyuncu panelden ayarlıyor.
 	{
 		"name": "Retro Düz",
-		"fog_color": Color(0.7, 0.8, 1.0), "fog_density": 0.014,
+		"fog_color": Color(0.7, 0.8, 1.0), "fog_density": 0.0049,
 		"shadow_opacity": 0.55,
 		# Oyuncunun panelden ayarladığı değerler (2026-10-14)
 		"contrast": 0.95, "saturation": 1.53, "exposure": 1.01,
 		"line_strength": 0.5, "vertex_snap": 2.5,
-		"post": {"pixel_size": 3.5, "posterize": 25.0, "dither": 1.0},
+		"post": {"pixel_size": 2.5, "posterize": 25.0, "dither": 1.0},
 		"retro": true,
 	},
 	{
@@ -82,7 +82,7 @@ const PRESETS := [
 		"ambient_energy": 0.75, "ambient_color": Color(0.62, 0.45, 0.65),
 		"sun_pitch": -14.0, "sun_yaw": -70.0, "sun_color": Color(1.0, 0.64, 0.36), "sun_energy": 1.75,
 		"shadow_opacity": 0.8,
-		"fog_color": Color(1.0, 0.7, 0.55), "fog_density": 0.012,
+		"fog_color": Color(1.0, 0.7, 0.55), "fog_density": 0.0042,
 		"contrast": 1.08, "saturation": 1.3,
 		"glow": true, "glow_intensity": 0.9, "glow_bloom": 0.12,
 		"line_strength": 0.35, "noise_strength": 0.08, "vertex_snap": 3.0,
@@ -97,7 +97,7 @@ const PRESETS := [
 		"sky_top": Color(0.25, 0.55, 1.0), "sky_horizon": Color(0.75, 0.9, 1.0),
 		"sun_pitch": -45.0, "sun_color": Color(1.0, 0.93, 0.85), "sun_energy": 1.4,
 		"ambient_energy": 0.65, "ambient_color": Color(0.6, 0.55, 0.85),
-		"fog_color": Color(0.78, 0.86, 1.0), "fog_density": 0.01,
+		"fog_color": Color(0.78, 0.86, 1.0), "fog_density": 0.0035,
 		"contrast": 1.15, "saturation": 1.5,
 		"line_strength": 0.35, "noise_strength": 0.06, "vertex_snap": 3.0,
 		"post": {
@@ -114,7 +114,7 @@ const PRESETS := [
 		"ambient_energy": 0.75,
 		"sun_pitch": -16.0, "sun_yaw": -70.0, "sun_color": Color(1.0, 0.66, 0.4), "sun_energy": 1.7,
 		"shadow_opacity": 0.8,
-		"fog_color": Color(1.0, 0.68, 0.6), "fog_density": 0.012,
+		"fog_color": Color(1.0, 0.68, 0.6), "fog_density": 0.0042,
 		"contrast": 1.1, "saturation": 1.3,
 		"glow": true, "glow_intensity": 0.8, "glow_bloom": 0.1,
 		"line_strength": 0.35, "noise_strength": 0.08, "vertex_snap": 3.0,
@@ -129,7 +129,7 @@ const PRESETS := [
 		"name": "Retro Kartpostal",
 		"sky_top": Color(0.45, 0.6, 0.8), "sky_horizon": Color(0.92, 0.86, 0.78),
 		"sun_pitch": -35.0, "sun_yaw": -50.0, "sun_color": Color(1.0, 0.88, 0.72), "sun_energy": 1.2,
-		"fog_color": Color(0.92, 0.86, 0.78), "fog_density": 0.012,
+		"fog_color": Color(0.92, 0.86, 0.78), "fog_density": 0.0042,
 		"brightness": 1.03, "contrast": 0.9, "saturation": 0.85,
 		"line_strength": 0.35, "noise_strength": 0.1, "vertex_snap": 3.0,
 		"post": {
@@ -275,6 +275,9 @@ func _apply_materials(node: Node, p: Dictionary) -> void:
 ## Bir meshin oyun shader'ı kullanan malzemeleri (tek malzeme ya da yüzey başına).
 func _shader_materials(node: Node) -> Array:
 	var out := []
+	# MultiMesh katmanları (sokak eşyaları, trafik ışıkları) da tek malzemeyle çizilir
+	if node is MultiMeshInstance3D and node.material_override is ShaderMaterial:
+		out.append(node.material_override)
 	if node is MeshInstance3D:
 		if node.material_override is ShaderMaterial:
 			out.append(node.material_override)
