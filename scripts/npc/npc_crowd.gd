@@ -32,11 +32,22 @@ extends Node3D
 @export var spawn_min := 45.0
 @export var spawn_max := 130.0
 @export var recycle_distance := 160.0
+## Yükseklikle seyrelme: bu yüksekliğe (m) kadar tam kalabalık, density_top'ta en seyrek
+@export var density_full_h := 10.0
+@export var density_top_h := 80.0
+@export var density_min := 0.06
+## Engelden kaçınma: önüne bakış mesafesi (m) ve bakış yüksekliği
+@export var probe_len := 1.4
+@export var probe_h := 0.5
 
 var player: SkateController
 var camera: Camera3D
 var walk_source: Node                 # yaya ağını veren seviye (ada)
 var look: Node                        # görünüm ayarları yeni NPC'lere de uygulansın
+var benches: Banklar                  # NPC'ler ara sıra banka oturur
+## Yeni hedef seçerken banka gitme olasılığı ve oturma süresi (sn)
+@export var bench_chance := 0.2
+@export var sit_time := Vector2(10.0, 30.0)
 
 var _astar := AStar3D.new()
 var _points: Array[Vector3] = []
@@ -152,16 +163,27 @@ func _edge_count() -> int:
 	return c / 2
 
 
+## Bu yükseklikte kalabalığın yoğunluğu (0..1): dağa çıktıkça azalır
+func _density(h: float) -> float:
+	return clampf(1.0 - (h - density_full_h) / (density_top_h - density_full_h) * (1.0 - density_min), density_min, 1.0)
+
+
 func _random_point() -> int:
 	return _rng.randi() % _points.size()
 
 
 func _new_destination(n: Npc) -> void:
+	_leave_bench(n)
 	var from := _astar.get_closest_point(n.global_position)
-	for attempt in 6:
+	if benches and n.can_sit(Banklar.SEAT_Y) and _rng.randf() < bench_chance and _go_to_bench(n, from):
+		return
+	for attempt in 10:
 		# Büyük adada hedef yakın olsun (30-140 m): yürüyüş oyuncunun çevresinde kalır
 		var to := _point_near(n.global_position, 30.0, 140.0) if _points.size() > 600 else _random_point()
 		if from == to or _points[to].distance_to(_points[from]) < 12.0:
+			continue
+		# Dağın yukarısı seyrek: yüksekteki hedefler daha az seçilir
+		if _rng.randf() > _density(_points[to].y):
 			continue
 		var ids := _astar.get_id_path(from, to)
 		if ids.size() > 1:
@@ -171,6 +193,37 @@ func _new_destination(n: Npc) -> void:
 			n.set_path(route, ids)
 			return
 	n.idle_for(_rng.randf_range(1.0, 3.0))
+
+
+## Yakındaki boş bir bankın önüne yol: yaya ağıyla en yakın düğüme, oradan bankın önüne.
+func _go_to_bench(n: Npc, from: int) -> bool:
+	var id := benches.free_seat_near(n.global_position, 45.0, _rng)
+	if id < 0:
+		return false
+	var front := benches.front_point(id)
+	var to := _astar.get_closest_point(front)
+	var ids := _astar.get_id_path(from, to)
+	if ids.is_empty():
+		return false
+	var route := PackedVector3Array()
+	for k in ids:
+		route.append(_points[k])
+	route.append(front)
+	benches.reserve(id, n)
+	n.bench_seat = id
+	n.set_path(route, ids)
+	return true
+
+
+## Banktan kalk (ya da gitmekten vazgeç): yeri boşalt; oturuyorsa bankın önüne çık
+func _leave_bench(n: Npc) -> void:
+	if n.bench_seat < 0:
+		return
+	if benches:
+		if n.is_sitting():
+			n.global_position = benches.front_point(n.bench_seat)
+		benches.release(n.bench_seat, n)
+	n.bench_seat = -1
 
 
 ## Doğma noktası: oyuncudan en az spawn_min uzakta ve yakınsa (90 m) kameranın görmediği bir yer.
@@ -185,6 +238,8 @@ func _spawn_point(allow_view := false) -> Vector3:
 		var p := _points[_random_point()]
 		var d := Vector2(p.x - pp.x, p.z - pp.z).length()
 		if d < spawn_min or (big and d > spawn_max):
+			continue
+		if _rng.randf() > _density(p.y):
 			continue
 		if not allow_view and camera and d < 90.0 and camera.is_position_in_frustum(p + Vector3.UP):
 			continue
@@ -228,6 +283,11 @@ func _physics_process(delta: float) -> void:
 			_new_destination(n)
 		elif n.idle_done():
 			_new_destination(n)
+		elif n.sit_done():
+			_leave_bench(n)
+			n.idle_for(_rng.randf_range(0.5, 1.5))
+		elif n.reached_end() and n.bench_seat >= 0 and benches:
+			n.sit_at(benches.seat_point(n.bench_seat), benches.facing(n.bench_seat), _rng.randf_range(sit_time.x, sit_time.y))
 		elif n.reached_end():
 			if _rng.randf() < 0.4:
 				n.idle_for(_rng.randf_range(2.0, 6.0))
@@ -249,6 +309,10 @@ func _physics_process(delta: float) -> void:
 					var back := start - n.global_position
 					back.y = 0.0
 					steer = back.limit_length(n.speed) if back.length() > 0.4 else Vector3.ZERO
+		# Bankın önüne son yaklaşmada bankı engel sayma
+		var to_bench := n.bench_seat >= 0 and n.path_index >= n.path.size() - 1
+		if steer != Vector3.ZERO and not n.far and not to_bench:
+			steer = _avoid_obstacles(n, steer, delta)
 		if steer != Vector3.ZERO:
 			var sep := Vector3.ZERO
 			for j in _npcs.size():
@@ -279,10 +343,52 @@ func _physics_process(delta: float) -> void:
 		n.set_far(n.global_position.distance_to(cam_pos) > visible_distance)
 		# Çok uzakta kalan NPC oyuncunun çevresine geri gelir (görünmezken)
 		if player and _points.size() > 600 and n.far and n.global_position.distance_to(ppos) > recycle_distance:
+			_leave_bench(n)
 			var sp := _spawn_point()
 			if sp != Vector3.INF:
 				n.global_position = sp
 			_new_destination(n)
+
+
+## Önündeki engele (bank, lamba, çöp kovası, araba...) bakar: araba ise bekler, değilse
+## engelin açık tarafından dolanır. Seçilen yan bir süre korunur (sağ-sol arasında titremesin).
+func _avoid_obstacles(n: Npc, steer: Vector3, delta: float) -> Vector3:
+	n.avoid_t = maxf(n.avoid_t - delta, 0.0)
+	var dir := steer.normalized()
+	var hit := _probe(n, dir, probe_len)
+	if hit.is_empty():
+		if n.avoid_t > 0.0:
+			# Engelin yanından geçerken yolu biraz daha dışarıdan sürdür
+			var side_dir := dir.rotated(Vector3.UP, n.avoid_side * deg_to_rad(35.0))
+			if _probe(n, side_dir, probe_len * 0.7).is_empty():
+				return side_dir * steer.length()
+		return steer
+	if hit.collider is Araba:
+		return Vector3.ZERO
+	if n.avoid_t <= 0.0:
+		# Engelin daha açık tarafı
+		var l := _probe(n, dir.rotated(Vector3.UP, deg_to_rad(50.0)), probe_len)
+		var r := _probe(n, dir.rotated(Vector3.UP, deg_to_rad(-50.0)), probe_len)
+		n.avoid_side = 1.0 if (r.size() > 0 and l.is_empty()) or (l.is_empty() == r.is_empty() and _rng.randf() < 0.5) else -1.0
+	n.avoid_t = 0.9
+	for a in [55.0, 85.0, 120.0]:
+		var d2 := dir.rotated(Vector3.UP, n.avoid_side * deg_to_rad(a))
+		if _probe(n, d2, probe_len * 0.8).is_empty():
+			return d2 * steer.length() * 0.8
+	n.avoid_side = -n.avoid_side
+	return Vector3.ZERO
+
+
+## Diz hizasından yatay ışın: yer / kaldırım değil, dik bir engel bulursa sonucu döner
+func _probe(n: Npc, dir: Vector3, length: float) -> Dictionary:
+	var from := n.global_position + Vector3.UP * probe_h
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * length)
+	if player:
+		q.exclude = [player.get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty() or hit.normal.y > 0.6:
+		return {}
+	return hit
 
 
 func npc_list() -> Array[Npc]:

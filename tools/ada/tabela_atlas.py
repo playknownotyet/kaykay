@@ -96,6 +96,15 @@ def triangle_sign(draw_fn):
     return im
 
 
+def yield_sign():
+    # Yol ver: ters üçgen, kırmızı kenar, beyaz iç
+    im = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.polygon([(4, 12), (124, 12), (64, 122)], fill=RED)
+    d.polygon([(26, 24), (102, 24), (64, 98)], fill=WHITE)
+    return im
+
+
 def curve(d, left):
     s = -1 if left else 1
     pts = []
@@ -206,6 +215,8 @@ def main():
             cells[k] = speed_sign(int(k[4:]))
         elif k == "donel_kavsak":
             cells[k] = round_blue(roundabout)
+        elif k == "yol_ver":
+            cells[k] = yield_sign()
         elif k == "yaya_gecidi":
             cells[k] = ped_square()
         elif k in ("viraj_sol", "viraj_sag"):

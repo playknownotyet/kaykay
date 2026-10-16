@@ -20,6 +20,8 @@ extends Node3D
 @export var recycle_distance := 280.0
 ## Bu mesafeden uzaktaki arabaların sürücü animasyonu durur
 @export var detail_distance := 70.0
+## Dağa doğru tırmanan şeritlerde hız sınırı bu kadar yüksek (tutunup hızlı çıkmak için)
+@export var uphill_boost := 1.2
 
 const A_MAX := 2.2        # en çok hızlanma (m/sn²)
 const B_COMF := 3.5       # rahat fren
@@ -43,6 +45,8 @@ var _ready_lanes := false
 var _frame := 0
 var _spawnable: Array[int] = []
 var _spawn_weight := 0.0
+var _to_top := PackedFloat32Array()   # şeridin sonundan tepeye kalan yol (m)
+var _skitched: Araba = null
 
 
 func _ready() -> void:
@@ -68,6 +72,7 @@ func _ready() -> void:
 		if not L.conn and L.len > 25.0 and L.next.size() > 0:
 			_spawnable.append(i)
 			_spawn_weight += L.len
+	_mark_uphill()
 	_ready_lanes = true
 	# Kalabalık ve kamera hazır olsun
 	await get_tree().physics_frame
@@ -93,7 +98,60 @@ func _lane_limit(li: int, s: float) -> float:
 	var cum: PackedFloat32Array = L.cum
 	var v: PackedFloat32Array = L.v
 	var lo := clampi(cum.bsearch(s) - 1, 0, v.size() - 1)
-	return v[lo]
+	return v[lo] * (uphill_boost if L.up else 1.0)
+
+
+## Tepeye yol: en yüksek şeritlerden geriye doğru (Dijkstra) her şeridin sonundan tepeye kalan
+## mesafe. Tutunulan araba kavşaklarda bunu azaltan yönü seçer. Yükselen şeritler hızlı (L.up).
+func _mark_uphill() -> void:
+	var n := _lanes.size()
+	var top_h := -1e9
+	for L in _lanes:
+		var pts: PackedVector3Array = L.pts
+		top_h = maxf(top_h, pts[pts.size() - 1].y)
+	var prev := []
+	prev.resize(n)
+	for i in n:
+		prev[i] = []
+	for i in n:
+		for nx in _lanes[i].next:
+			prev[nx].append(i)
+	_to_top.resize(n)
+	_to_top.fill(1e9)
+	var open: Array[int] = []
+	for i in n:
+		var L: Dictionary = _lanes[i]
+		var pts: PackedVector3Array = L.pts
+		L.up = pts[pts.size() - 1].y - pts[0].y > maxf(0.5, L.len * 0.015)
+		if pts[pts.size() - 1].y > top_h - 3.0:
+			_to_top[i] = 0.0
+			open.append(i)
+	while not open.is_empty():
+		var bi := 0
+		for k in open.size():
+			if _to_top[open[k]] < _to_top[open[bi]]:
+				bi = k
+		var u: int = open[bi]
+		open.remove_at(bi)
+		for p in prev[u]:
+			var d: float = _to_top[u] + _lanes[u].len
+			if d < _to_top[p]:
+				_to_top[p] = d
+				open.append(p)
+
+
+## Tutunulan arabanın sonraki şeridi: tepeye en yakın yön (tepeye vardıysa rastgele)
+func _choose_uphill(li: int) -> int:
+	var nx: PackedInt32Array = _lanes[li].next
+	if nx.is_empty():
+		return -1
+	if _to_top[li] <= 0.0:
+		return _choose_next(li)
+	var best := nx[0]
+	for x in nx:
+		if _to_top[x] + _lanes[x].len < _to_top[best] + _lanes[best].len:
+			best = x
+	return best
 
 
 ## Arabanın yolu üzerinde d metre ilerideki (d < 0: gerideki, şerit başında durur) nokta
@@ -128,12 +186,21 @@ func _choose_next(li: int) -> int:
 
 
 func _extend_route(car: Araba) -> void:
+	var uphill := car == _skitched
 	while car.route.size() < 4:
 		var last := car.lane if car.route.is_empty() else car.route[car.route.size() - 1]
-		var n := _choose_next(last)
+		var n := _choose_uphill(last) if uphill else _choose_next(last)
 		if n < 0:
 			break
 		car.route.append(n)
+
+
+## Rotayı ilk adımdan sonra yeniden seç (kavşağa çok yakınsa ilk geçiş korunur)
+func _reroute(car: Araba) -> void:
+	var keep := 1 if _lanes[car.lane].len - car.s < 25.0 else 0
+	while car.route.size() > keep:
+		car.route.pop_back()
+	_extend_route(car)
 
 
 # ---------- Doğma / geri çağırma ----------
@@ -248,6 +315,14 @@ func _physics_process(delta: float) -> void:
 					recycled += 1
 	if player:
 		player.skitch_candidate = candidate
+		# Tutunma başladı / bitti: yolu yeniden seç (tutunulan tepeye gider, bırakılınca rastgele)
+		var sk: Araba = player.skitch_car
+		if sk != _skitched:
+			var old := _skitched
+			_skitched = sk
+			for c in [old, sk]:
+				if c and is_instance_valid(c) and c.lane >= 0:
+					_reroute(c)
 
 
 ## Sürüş kararı (iki karede bir): önümdeki yolun hız sınırı, ışık, öndeki araba ve yayalar.
@@ -280,6 +355,9 @@ func _decide(car: Araba, t: float) -> void:
 					var must_stop := stv == TrafikSinyal.KIRMIZI
 					if stv == TrafikSinyal.SARI and stop_d > v * v / (2.0 * 4.5):
 						must_stop = true
+					if not must_stop and TrafikSinyal.must_yield(int(L.j), int(L.arm)) and _priority_traffic(car, int(L.j)):
+						must_stop = true
+						stv = TrafikSinyal.KIRMIZI
 					if not must_stop and k < car.route.size() and _exit_blocked(car, k):
 						must_stop = true
 					if not must_stop and k < car.route.size() and _lanes[car.route[k]].turn == "sol" 							and _oncoming(car, int(L.j), int(L.arm), t):
@@ -365,6 +443,21 @@ func _oncoming(car: Araba, j: int, arm: int, t: float) -> bool:
 		if not L.conn and int(L.j) == j and opp.has(int(L.arm)) and L.len - o.s < 32.0 				and TrafikSinyal.car_state(j, int(L.arm), t) != TrafikSinyal.KIRMIZI:
 			return true
 		if L.conn and int(L.cj) == j and opp.has(int(L.fa)) and L.turn != "sol":
+			return true
+	return false
+
+
+## Işıksız kavşakta yan yoldan gelen için: kavşağın içinde başka araba ya da öncelikli
+## kollardan yaklaşan (dur çizgisine 30 m'den yakın, hareket eden) araba var mı?
+func _priority_traffic(car: Araba, j: int) -> bool:
+	var main := TrafikSinyal.main_arms(j)
+	for o in _cars:
+		if o == car or o.lane < 0:
+			continue
+		var L: Dictionary = _lanes[o.lane]
+		if L.conn and int(L.cj) == j:
+			return true
+		if not L.conn and int(L.j) == j and main.has(int(L.arm)) and L.len - o.s < 30.0 and (o.speed > 1.0 or L.len - o.s < 8.0):
 			return true
 	return false
 

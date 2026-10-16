@@ -20,7 +20,7 @@ func _process(delta: float) -> void:
 func _draw() -> void:
 	if not player:
 		return
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var px := maxf(floorf(size.y / 120.0), 2.0)
 	var shadow := Color(0.05, 0.05, 0.08, 0.85)
 

@@ -22,6 +22,8 @@ signal action_started(name: String) # tek seferlik eylem (çantaya atma vb.)
 signal context_action(id: String)   # bağlam butonu (soygun başlat, al ...) basıldı
 signal auto_hopped                  # kaldırım önünde kendiliğinden küçük zıplama
 signal inventory_changed
+signal sat_down
+signal stood_up
 signal bag_changed(open: bool)
 signal stow_started(item: String)   # elindeki eşyayı çantaya atmaya başladı
 signal item_stowed(item: String)    # eşya çantada
@@ -99,8 +101,10 @@ enum BoardAnim { NONE, MOUNTING, DISMOUNTING }
 @export var grind_min_speed := 3.0
 ## Rayın sonunda kendiliğinden çıkarken hafif yukarı sıçrama.
 @export var grind_exit_pop := 1.4
-## Raydan ollie ile çıkarken joystick ile yana itme.
-@export var grind_side_jump := 2.2
+## Raydan zıplayınca yana itme (joystick hangi yöndeyse oraya; boştaysa raya gelinen yana).
+@export var grind_side_jump := 3.2
+## Raydan zıplayınca bu süre hiçbir raya tutunulmaz (yan parçalara geri yapışmasın).
+@export var grind_exit_block := 0.45
 
 # --- Durum (görsel ve kamera okur) ---
 var speed := 0.0
@@ -145,6 +149,10 @@ var held_item := ""
 ## Elde tutulan eşyanın düğümü (görsel her kare sol ele oturtur)
 var held_node: Node3D = null
 var bag_open := false
+## Bankta oturuyor: gövde bankın önünde durur, görsel sit_offset kadar kayıp oturağa yerleşir
+var sitting := false
+var sit_offset := Vector3.ZERO
+var _sit_t := 0.0
 ## Sinematik: biri tutup taşıyor (konumu dışarıdan verilir, fizik yok)
 var held_in_air := false
 ## karakter_rig.py: canta_ac / canta_kapat 24 kare, cantaya_koy 24 kare (14. karede çantada)
@@ -163,6 +171,8 @@ var _rail_sign := 1.0
 var _snap_offset := Vector3.ZERO
 var _last_rail: GrindRail
 var _last_rail_timer := 0.0
+var _latch_block := 0.0
+var _rail_side := 1.0       # raya hangi yandan gelindi (+1 sağ, -1 sol; gidiş yönüne göre)
 
 const COYOTE_TIME := 0.1
 var _windup := -1.0          # >= 0: ollie hazırlığı sürüyor
@@ -190,6 +200,7 @@ func _ready() -> void:
 
 
 func respawn() -> void:
+	stand_up()
 	cancel_grind()
 	_end_skitch(false)
 	fall_time = 0.0
@@ -215,6 +226,7 @@ func _physics_process(delta: float) -> void:
 	_coyote = maxf(_coyote - delta, 0.0)
 	_ollie_lock = maxf(_ollie_lock - delta, 0.0)
 	_last_rail_timer = maxf(_last_rail_timer - delta, 0.0)
+	_latch_block = maxf(_latch_block - delta, 0.0)
 	if stumble_time > 0.0:
 		stumble_time = maxf(stumble_time - delta, 0.0)
 		var t := STUMBLE_TIME - stumble_time
@@ -233,6 +245,17 @@ func _physics_process(delta: float) -> void:
 			held_node = null
 			inventory_changed.emit()
 			item_stowed.emit(it)
+	if sitting:
+		_sit_t += delta
+		velocity = Vector3.ZERO
+		speed = 0.0
+		inp.consume_skitch()
+		# Joystick'i itmek, zıplamak ya da kaykay butonu: kalk
+		var stand := _sit_t > 0.6 and (inp.move_vector.length() > 0.5 or _ollie_buffer > 0.0)
+		if inp.consume_board_toggle() or stand:
+			stand_up()
+		_ollie_buffer = 0.0
+		return
 	if held_in_air:
 		velocity = Vector3.ZERO
 		speed = 0.0
@@ -506,7 +529,7 @@ func _handle_walls() -> void:
 ## Kaykaydan in / kaykaya bin. Animasyonlu: binerken koşup kaykayı öne atar ve
 ## üstüne zıplar; inerken kaykaydan atlayıp onu altından çekip eline alır.
 func toggle_board() -> void:
-	if board_anim != BoardAnim.NONE or held_item != "" or bag_open:
+	if board_anim != BoardAnim.NONE or held_item != "" or bag_open or sitting:
 		return
 	if on_foot:
 		board_anim = BoardAnim.MOUNTING
@@ -608,6 +631,8 @@ func _foot_move(delta: float) -> void:
 # ---------- Grind ----------
 
 func _try_latch() -> void:
+	if _latch_block > 0.0:
+		return
 	var p := global_position
 	var vh := Vector3(velocity.x, 0.0, velocity.z)
 	var move_dir := vh.normalized() if vh.length() > 0.5 else heading
@@ -650,6 +675,9 @@ func _start_grind(rail: GrindRail, s: float, align: float, h_speed: float) -> vo
 	# Çapraz girişte hızın bir kısmı kaybolur ama asla çok yavaş kalmaz
 	speed = maxf(h_speed * lerpf(0.7, 1.0, absf(align)), grind_min_speed)
 	_snap_offset = global_position - rail.point_at(s)
+	var side := (rail.direction * _rail_sign).cross(Vector3.UP).normalized()
+	var off := Vector3(_snap_offset.x, 0.0, _snap_offset.z).dot(side)
+	_rail_side = signf(off) if absf(off) > 0.02 else (1.0 if randf() < 0.5 else -1.0)
 	_double_used = false
 	_windup = -1.0
 	grinding = true
@@ -717,14 +745,18 @@ func _exit_grind(jump: bool) -> void:
 	grinding = false
 	var d := _rail.direction * _rail_sign
 	velocity = d * speed + Vector3.UP * (ollie_speed if jump else grind_exit_pop)
-	# Joystick yana basılıysa raydan yana atla ve bu raya bir süre tutunma;
-	# basılı değilse sadece zıpla, aynı raya geri konabilirsin (hop).
+	# Zıplayınca raydan her zaman yana atlar: joystick hangi yöne basılıysa oraya,
+	# basılı değilse raya gelinen yana. Kısa süre hiçbir raya tutunmaz.
 	var hand: float = SkateInput.steer_target
-	var transfer := jump and absf(hand) > 0.3
+	var transfer := jump
 	if jump:
-		if transfer:
-			var side := d.cross(Vector3.UP).normalized()
-			velocity += side * signf(hand) * grind_side_jump
+		var side := d.cross(Vector3.UP).normalized()
+		var sg := signf(hand) if absf(hand) > 0.3 else _rail_side
+		velocity += side * sg * grind_side_jump
+		heading = (heading + side * sg * 0.35).normalized()
+		_latch_block = grind_exit_block
+		_jump_base_y = global_position.y
+		_double_used = false
 		_ollie_buffer = 0.0
 		ollied.emit()
 	global_position += Vector3.UP * 0.03
@@ -824,7 +856,7 @@ func _step_up(dir: Vector3) -> bool:
 
 ## Çanta butonu: yayayken çantayı sırtından alıp açar / kapatıp sırtına takar
 func toggle_bag() -> void:
-	if fall_time > 0.0 or held_in_air:
+	if fall_time > 0.0 or held_in_air or sitting:
 		return
 	# Açılırken tekrar basılırsa da kapanır (açma yarıda kesilir)
 	if action_time > 0.0 and not (bag_open and action_name == "canta_ac"):
@@ -844,6 +876,32 @@ func toggle_bag() -> void:
 	bag_changed.emit(true)
 
 
+## Banka otur: front = oturağın önündeki yer noktası, facing = oturanın baktığı yön,
+## seat = oturan kökünün olacağı nokta (kalça oturağın üstüne gelir)
+func sit(front: Vector3, facing: Vector3, seat: Vector3) -> bool:
+	if sitting or not on_foot or not is_on_floor() or action_time > 0.0 or fall_time > 0.0 or bag_open or input_locked:
+		return false
+	global_position = Vector3(front.x, global_position.y, front.z)
+	reset_physics_interpolation()
+	heading = Vector3(facing.x, 0.0, facing.z).normalized()
+	forward_on_ground = heading
+	sit_offset = seat - global_position
+	velocity = Vector3.ZERO
+	speed = 0.0
+	sitting = true
+	_sit_t = 0.0
+	sat_down.emit()
+	return true
+
+
+func stand_up() -> void:
+	if not sitting:
+		return
+	sitting = false
+	sit_offset = Vector3.ZERO
+	stood_up.emit()
+
+
 ## Elindeki eşyayı çantaya at (yer varsa); 14. karede çantada olur
 func stow_held() -> bool:
 	if held_item == "" or not on_foot or action_time > 0.0 or bag_open or inventory.find("") < 0:
@@ -858,6 +916,13 @@ func stow_held() -> bool:
 func hold_item(item: String, node: Node3D) -> void:
 	held_item = item
 	held_node = node
+	inventory_changed.emit()
+
+
+## Eldeki eşyayı bırak (rafa geri koydu): görsel düğümü çağıran yönetir
+func release_held() -> void:
+	held_item = ""
+	held_node = null
 	inventory_changed.emit()
 
 
@@ -896,6 +961,7 @@ func press_context(id: String) -> void:
 func knockdown(push: Vector3) -> void:
 	if fall_time > 0.0:
 		return
+	stand_up()
 	cancel_grind()
 	_end_skitch(false)
 	if board_anim == BoardAnim.DISMOUNTING:

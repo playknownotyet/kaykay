@@ -1736,6 +1736,39 @@ def standard_actions(A, style=None, secondary=None):
         sec(pose, "idle", ph, f)
         A.key(f, pose)
 
+    sit_action(A, secondary)
+
+
+def sit_action(A, secondary=None):
+    """Bankta oturma (döngü): kalça diz yüksekliğine iner, uyluklar öne yatay, baldırlar aşağı
+    sarkar (küçük hayvanlarda ayaklar havada sallanır), eller uyluklarda; nefes ve etrafa bakış.
+    Godot (npc.gd): kalça kemiği bankın oturağına oturtulur."""
+    B = A.B
+    sec = secondary or (lambda pose, kind, ph, f: None)
+    A.action("otur")
+    thigh = B.hip_z - B.knee_z
+    drop = thigh * 0.95
+    seat_z = B.hip_z - drop
+    shin = B.knee_z - 0.085
+    n = 96
+    for f in range(0, n + 1, 4):
+        ph = math.tau * f / n
+        br = math.sin(ph * 2)
+        pose = A.stand(hips=(0, 0.03, -drop - 0.004 * br))
+        A.add_rot(pose, "spine", (-4 - 1.2 * br, 0, 0))
+        A.add_rot(pose, "chest", (-2, 0, 0))
+        A.spread_neck(pose, (4, 24 * math.sin(ph) * abs(math.sin(ph)), 0), 0.5)
+        for sfx, side, off in (("L", 1, 0.0), ("R", -1, math.pi)):
+            hp, kn, an, _ = B.leg_points(side)
+            sw = math.sin(ph * 2 + off)
+            pose[f"foot.{sfx}"] = (hp.x * 1.05, -thigh * 0.95 - shin * (0.18 + 0.12 * sw), seat_z - shin * 0.95)
+            pose[f"knee.{sfx}"] = (hp.x * 1.3, -thigh * 1.5, seat_z + 0.4)
+            pose[f"hand.{sfx}"] = (hp.x * 1.25 + 0.03 * side, -thigh * 0.55, seat_z + 0.07)
+            pose[f"elbow.{sfx}"] = ((B.shoulder_w + 0.12) * side, 0.3, B.shoulder_z - drop - 0.4)
+            pose[f"hand_rot.{sfx}"] = (-50, 0, 10 * side)
+        sec(pose, "idle", ph, f)
+        A.key(f, pose)
+
 
 def walk_speed(style):
     S = dict(DEFAULT_STYLE)

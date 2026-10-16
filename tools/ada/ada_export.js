@@ -759,6 +759,9 @@ for (let j = 0; j < N; j++) {
         // üçgen yamaçtan bir köşe alıp kaldırımın altına / üstüne eğilmesin)
         const wv = smooth(edge + 2, edge + shoulder + 2, nr.d);
         hv = (nr.h - 0.3) + (t - nr.h + 0.3) * wv;
+        // Yolun aşağı tarafındaki şevde görüntü çarpışmanın üstüne çıkmasın (yamaçtan inerken
+        // oyuncu görünen zeminin içine gömülüyordu); yukarı tarafta düz bant kalır (kaldırımı örtmesin)
+        if (t < nr.h) hv = Math.min(hv, hc - 0.06);
         if (dh > 2 && land >= 0 && w < 0.85) m = MAT.SOIL;
       }
     }

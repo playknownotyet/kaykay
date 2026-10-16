@@ -22,7 +22,7 @@ const MODELS := {
 }
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
 
-enum State { WALK, IDLE, STUMBLE }
+enum State { WALK, IDLE, STUMBLE, SIT }
 
 var recipe: Dictionary
 var speed := 1.2
@@ -34,6 +34,14 @@ var path_ids := PackedInt64Array()    # yaya ağı düğümleri (yaya geçidi ke
 var cross_index := -1                 # karşıya geçişi onaylanan yol parçası
 var far := false                      # kameradan uzak: gizli, animasyon durur
 var ground_exclude: Array[RID] = []   # zemin ışınının yok sayacağı gövdeler (oyuncu)
+var avoid_side := 1.0                 # engelden hangi yandan dolanıyor
+var avoid_t := 0.0                    # dolanma yönünü koruma süresi
+## Zemin ışını en fazla bu kadar yukarıdan başlar: bankın, arabanın, kutunun üstüne çıkmaz
+## (yalnız kaldırım gibi alçak basamaklar)
+const STEP_UP := 0.45
+## Bankta: rezerve ettiği yer (Banklar), oturma pozunda kalçanın köke göre yeri
+var bench_seat := -1
+var sit_hip := Vector3.INF
 
 var _model: Node3D
 var _anim: AnimationPlayer
@@ -53,8 +61,10 @@ func setup(p_recipe: Dictionary, materials: Dictionary) -> void:
 	_model = build_model(recipe, materials)
 	add_child(_model)
 	_anim = _model.find_child("AnimationPlayer", true, false)
-	for n in ["walk", "idle", "idle_look"]:
-		_anim.get_animation(n).loop_mode = Animation.LOOP_LINEAR
+	for n in ["walk", "idle", "idle_look", "otur"]:
+		if _anim.has_animation(n):
+			_anim.get_animation(n).loop_mode = Animation.LOOP_LINEAR
+	_measure_sit()
 	_anim.play("idle")
 	_anim.seek(randf() * 2.0, true)
 	_setup_springs(recipe.springs)
@@ -154,8 +164,46 @@ func stumble(from_pos: Vector3) -> void:
 	_set_state(State.STUMBLE)
 
 
+## Oturma pozunda kalça kemiğinin köke göre yeri (banka oturtmak için)
+func _measure_sit() -> void:
+	if not _anim.has_animation("otur"):
+		return
+	var skel: Skeleton3D = _model.find_children("*", "Skeleton3D", true, false)[0]
+	var hips := skel.find_bone("hips")
+	if hips < 0:
+		return
+	_anim.play("otur")
+	_anim.seek(0.0, true)
+	var to_root := global_transform.affine_inverse() * skel.global_transform
+	sit_hip = to_root * skel.get_bone_global_pose(hips).origin
+	_anim.play("idle")
+
+
+## Bu boyda banka oturabilir mi (kalçası oturaktan yukarıda kalmayacak kadar kısa olmalı)
+func can_sit(seat_h: float) -> bool:
+	return sit_hip != Vector3.INF and sit_hip.y <= seat_h + 0.06
+
+
+## Banka otur: hip = oturağın üstündeki kalça noktası, facing = bakış yönü
+func sit_at(hip: Vector3, facing: Vector3, seconds: float) -> void:
+	_yaw = atan2(-facing.x, -facing.z)
+	rotation.y = _yaw
+	global_position = hip + Vector3.UP * 0.05 - Basis(Vector3.UP, _yaw) * sit_hip
+	velocity = Vector3.ZERO
+	_timer = seconds
+	_set_state(State.SIT)
+
+
+func sit_done() -> bool:
+	return state == State.SIT and _timer <= 0.0
+
+
+func is_sitting() -> bool:
+	return state == State.SIT
+
+
 func is_busy() -> bool:
-	return state == State.STUMBLE
+	return state == State.STUMBLE or state == State.SIT
 
 
 ## Bir sonraki yol noktasına doğru istenen hız (kalabalık bunu kaçınmayla birleştirir).
@@ -178,6 +226,12 @@ func reached_end() -> bool:
 
 
 func tick(delta: float, steer: Vector3) -> void:
+	if state == State.SIT:
+		_timer -= delta
+		if not far:
+			_play("otur")
+			_anim.speed_scale = 1.0
+		return
 	if state == State.STUMBLE or state == State.IDLE:
 		_timer -= delta
 		velocity = velocity.move_toward(Vector3.ZERO, 6.0 * delta)
@@ -207,9 +261,13 @@ func tick(delta: float, steer: Vector3) -> void:
 func _follow_ground(delta: float) -> void:
 	if not far:
 		var p := global_position
-		var q := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 2.5, p + Vector3.DOWN * 6.0, 0xFFFFFFFF, ground_exclude)
+		# Görünür olurken yol yüksekliğinden başla (yerin altında kalmış olabilir)
+		var top := p.y
+		if _ground_snap and path_index < path.size():
+			top = maxf(top, path[path_index].y)
+		var q := PhysicsRayQueryParameters3D.create(Vector3(p.x, top + STEP_UP, p.z), p + Vector3.DOWN * 6.0, 0xFFFFFFFF, ground_exclude)
 		var hit := get_world_3d().direct_space_state.intersect_ray(q)
-		if not hit.is_empty():
+		if not hit.is_empty() and not (hit.collider is Araba):
 			if _ground_snap:
 				global_position.y = hit.position.y
 				_ground_snap = false

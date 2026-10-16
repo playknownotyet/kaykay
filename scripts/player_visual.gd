@@ -15,8 +15,8 @@ extends Node3D
 const MODEL := preload("res://assets/karakter/karakter.glb")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
 const STATES := ["ride", "push", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount", "dus", "tutun", "yaya_hava", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "canta_acik",
-	"eline_al", "cantaya_koy", "havada_cirpin"]
-const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "brake", "air", "grind", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut"]
+	"eline_al", "cantaya_koy", "havada_cirpin", "otur"]
+const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "brake", "air", "grind", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut", "otur"]
 ## Ollie animasyonunda fiziksel sıçramanın olduğu an (karakter_rig.py OLLIE_POP_FRAME / 30)
 const OLLIE_POP_TIME := 0.1
 
@@ -84,6 +84,7 @@ func _update_held_node() -> void:
 		_hand_l = _skel.find_bone("hand.L")
 	var hand := _skel.global_transform * _skel.get_bone_global_pose(_hand_l).origin
 	n.global_position = hand - Vector3.UP * 0.12
+	n.global_basis = Basis(Vector3.UP, global_rotation.y)
 
 
 func _ready() -> void:
@@ -141,6 +142,9 @@ func _physics_process(delta: float) -> void:
 	_ollie_t += delta
 	_air_t = 0.0 if (controller.grounded or controller.grinding) else _air_t + delta
 	_align(delta)
+	# Bankta: görsel gövdeden oturağa kayar (gövde bankın önünde kalır)
+	var sit_local := controller.global_basis.orthonormalized().inverse() * controller.sit_offset
+	position = position.lerp(sit_local, 1.0 - exp(-9.0 * delta))
 	_update_animation()
 	_update_arm_sway(delta)
 	_update_sparks()
@@ -235,7 +239,7 @@ func _setup_animation() -> void:
 		bt.connect_node(st + "_seek", 0, st + "_anim")
 		bt.connect_node("state", STATES.find(st), st + "_seek")
 
-	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin"]:
+	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "otur"]:
 		bt.add_node(st, anim.call(st))
 		bt.connect_node("state", STATES.find(st), st)
 
@@ -296,6 +300,8 @@ func _update_animation() -> void:
 		st = "havada_cirpin"
 	elif controller.fall_time > 0.0:
 		st = "yaya_dus" if controller.fall_on_foot else "dus"
+	elif controller.sitting:
+		st = "otur"
 	elif controller.action_time > 0.0 and controller.action_name != "":
 		st = controller.action_name
 	elif controller.bag_open and controller.on_foot:

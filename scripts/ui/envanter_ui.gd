@@ -13,7 +13,7 @@ var _anim := 0.0              # panel açılma (0..1)
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var vh := get_viewport_rect().size.y
+	var vh := get_rect().size.y
 	button = PixelButton.new()
 	button.icon_name = "canta"
 	var b := vh * 0.11
@@ -29,6 +29,9 @@ func _process(delta: float) -> void:
 	# Panel, çanta açma animasyonu bitince gelir
 	var show := player.bag_open and (not player.on_foot or player.action_time <= 0.0)
 	_anim = move_toward(_anim, 1.0 if show else 0.0, delta * 6.0)
+	# Sol kenarın ortası (güvenli alan içinde; telefon döndürülünce de)
+	var vh := get_rect().size.y
+	button.position = Vector2(vh * 0.04, vh * 0.5 - button.size.y * 0.5)
 	button.lit = player.bag_open
 	button.visible = not player.held_in_air and not player.input_locked
 	mouse_filter = Control.MOUSE_FILTER_STOP if _anim > 0.5 else Control.MOUSE_FILTER_IGNORE
@@ -46,7 +49,7 @@ func _draw() -> void:
 	if _anim <= 0.0 or not player:
 		_panel_rect = Rect2()
 		return
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var px := maxf(floorf(size.y / 140.0), 2.0)
 	var slot := floorf(size.y * 0.15)
 	var gap := px * 3.0
@@ -70,4 +73,5 @@ func _draw() -> void:
 		PixelArt._stepped_rect(self, r.grow(-px), px, Color(0.18, 0.15, 0.22, 0.95 * a))
 		var item: String = player.inventory[i]
 		if item != "":
-			PixelArt.draw_icon(self, item, r.get_center(), slot * 0.7, Color(1.0, 0.82, 0.25, a))
+			var ic := Urunler.color(item)
+			PixelArt.draw_icon(self, item, r.get_center(), slot * 0.7, Color(ic.r, ic.g, ic.b, a))

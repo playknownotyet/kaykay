@@ -1089,6 +1089,27 @@ def make_actions(arm_obj):
         pose["elbow.L"] = RAISED_ELBOWS["elbow.L"]
         key_pose(arm_obj, f, pose)
 
+    # --- Bankta oturma (döngü): kalça oturağın üstünde (bank oturağı 0,66 m: kalça neredeyse
+    #     ayaktaki yüksekliğinde), uyluklar öne yatay, ayaklar havada sallanır; sol el dizde,
+    #     sağ el yanda kaykayı tutar. Godot'ta kök oturağın ortasına, bankın tabanı hizasına konur.
+    act("otur")
+    n = 80
+    for f in range(0, n + 1, 4):
+        ph = math.tau * f / n
+        br = math.sin(ph * 2)
+        pose = stand_pose(hips=(0, 0.02, -0.025 - 0.004 * br), spine_rot=(-4 - 1.5 * br, 0, 0),
+                          chest_rot=(-3, 0, 0), head_rot=(4, 14 * math.sin(ph), 0))
+        for sfx, side, off in (("L", 1, 0.0), ("R", -1, math.pi)):
+            sw = math.sin(ph * 2 + off)
+            pose[f"foot.{sfx}"] = (0.12 * side, -0.34 - 0.08 * sw, 0.39 + 0.05 * max(sw, 0.0))
+            pose[f"foot_rot.{sfx}"] = (-20 + 14 * sw, 0, 6 * side)
+            pose[f"knee.{sfx}"] = (0.13 * side, -0.9, 0.7)
+        pose["hand.L"] = (0.13, -0.22, 0.72)
+        pose["hand_rot.L"] = (-60, 0, 10)
+        pose["elbow.L"] = (0.3, 0.2, 0.75)
+        pose["hand.R"] = (-0.27, 0.0, 0.68)
+        key_pose(arm_obj, f, pose)
+
     return acts
 
 

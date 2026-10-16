@@ -188,7 +188,7 @@ func _build_terrain() -> void:
 						any_land = true
 			if not any_land:
 				continue
-			var near := _terrain_chunk(i0, j0, cells, 2, center)
+			var near := _terrain_chunk(i0, j0, cells, 1, center)   # 2 m: çarpışmayla aynı ızgara
 			near.name = "Arazi_%d_%d" % [ci, cj]
 			near.visibility_range_end = LOD_NEAR_END
 			near.visibility_range_end_margin = 20.0

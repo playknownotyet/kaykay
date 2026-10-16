@@ -39,7 +39,7 @@ func _process(delta: float) -> void:
 
 
 func _draw() -> void:
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var px := maxf(floorf(size.y / 110.0), 2.0)
 	for it in _items:
 		var t: float = it.t

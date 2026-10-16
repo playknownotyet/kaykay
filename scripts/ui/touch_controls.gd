@@ -45,11 +45,12 @@ var _pressed := {}                # buton adı -> dokunuş indeksi
 
 
 func _ready() -> void:
-	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	GuvenliAlan.fit(self)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
 func _process(_delta: float) -> void:
+	GuvenliAlan.fit(self)       # butonlar ve joystick'ler güvenli alanın içinde
 	queue_redraw()
 
 
@@ -65,20 +66,21 @@ func _input(event: InputEvent) -> void:
 		if event.physical_keycode == KEY_B:
 			player.toggle_bag()
 			return
+	# Dokunuşlar bu denetimin yerel koordinatına (güvenli alan kadar kayık) çevrilir
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			_on_press(event.index, event.position)
+			_on_press(event.index, event.position - global_position)
 		else:
 			_on_release(event.index)
 	elif event is InputEventScreenDrag:
-		_on_drag(event.index, event.position)
+		_on_drag(event.index, event.position - global_position)
 
 
 # ---------- Butonlar ----------
 
 ## Görünür butonlar: ad -> [dikdörtgen, ikon]
 func _buttons() -> Dictionary:
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var h := size.y
 	var m := h * 0.04
 	var out := {}
@@ -93,7 +95,7 @@ func _buttons() -> Dictionary:
 		for i in player.context_buttons.size():
 			var cb: Dictionary = player.context_buttons[i]
 			var c := base - Vector2((cd + h * 0.03) * i, 0)
-			out["ctx:" + String(cb.id)] = [Rect2(c - Vector2(cd, cd) * 0.5, Vector2(cd, cd)), cb.icon]
+			out["ctx:" + String(cb.id)] = [Rect2(c - Vector2(cd, cd) * 0.5, Vector2(cd, cd)), cb.icon, cb.get("color", Color(1, 1, 1, 0.95))]
 	if player.input_locked or player.held_in_air:
 		return out
 	if player.on_foot:
@@ -140,18 +142,18 @@ func _press_button(name: String) -> void:
 # ---------- Dokunuş olayları ----------
 
 func _on_press(index: int, pos: Vector2) -> void:
-	if _is_blocked(pos):
+	if _is_blocked(pos + global_position):
 		return
 	var btns := _buttons()
 	for name in btns:
 		var r: Rect2 = btns[name][0]
-		var hit := pos.distance_to(r.get_center()) < r.size.x * 0.5 + get_viewport_rect().size.y * 0.015 if _is_round(name) 			else r.grow(get_viewport_rect().size.y * 0.012).has_point(pos)
+		var hit := pos.distance_to(r.get_center()) < r.size.x * 0.5 + get_rect().size.y * 0.015 if _is_round(name) 			else r.grow(get_rect().size.y * 0.012).has_point(pos)
 		if hit:
 			_pressed[name] = index
 			_touches[index] = {"zone": Zone.BUTTON, "start": pos, "pos": pos, "time": _now(), "last_time": _now()}
 			_press_button(name)
 			return
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var t := {
 		"zone": Zone.LEFT if pos.x < size.x * 0.5 else Zone.RIGHT,
 		"start": pos,
@@ -206,7 +208,7 @@ func _on_drag(index: int, pos: Vector2) -> void:
 	var t: Dictionary = _touches[index]
 	if t.zone == Zone.BUTTON:
 		return
-	var h := get_viewport_rect().size.y
+	var h := get_rect().size.y
 	var now := _now()
 	var dt := maxf(now - t.last_time, 0.001)
 	var finger_hps: float = (pos.y - t.pos.y) / h / dt
@@ -232,7 +234,7 @@ func _on_drag(index: int, pos: Vector2) -> void:
 
 
 func _left_drag(t: Dictionary, finger_hps: float) -> void:
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var dy: float = (t.pos.y - t.start.y) / size.y
 	if t.mode == SkateInput.Gesture.NONE:
 		if dy > DECIDE_DIST:
@@ -279,7 +281,7 @@ func _update_joystick() -> void:
 func _swipe_ollie(t: Dictionary) -> void:
 	if t.ollie_done:
 		return
-	var h := get_viewport_rect().size.y
+	var h := get_rect().size.y
 	var d: Vector2 = t.pos - t.start
 	if -d.y / h > OLLIE_DIST and absf(d.y) > absf(d.x) * 1.2 and _now() - t.time < OLLIE_TIME:
 		t.ollie_done = true
@@ -289,11 +291,11 @@ func _swipe_ollie(t: Dictionary) -> void:
 # ---------- Joystick yerleşimi ----------
 
 func _joy_radius() -> float:
-	return get_viewport_rect().size.y * 0.13
+	return get_rect().size.y * 0.13
 
 
 func _joy_rest() -> Vector2:
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var r := _joy_radius()
 	if SkateInput.on_foot:
 		# Kamera joystick'i sağ altta dinlenir (butonlar üstünde)
@@ -302,19 +304,19 @@ func _joy_rest() -> Vector2:
 
 
 func _move_rest() -> Vector2:
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var r := _joy_radius()
 	return Vector2(r * 1.9, size.y - r * 1.7)
 
 
 func _clamp_base(pos: Vector2) -> Vector2:
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var r := _joy_radius()
 	return Vector2(clampf(pos.x, size.x * 0.5 + r, size.x - r * 1.1), clampf(pos.y, r * 1.1, size.y - r * 1.1))
 
 
 func _clamp_left(pos: Vector2) -> Vector2:
-	var size := get_viewport_rect().size
+	var size := get_rect().size
 	var r := _joy_radius()
 	return Vector2(clampf(pos.x, r * 1.1, size.x * 0.5 - r), clampf(pos.y, r * 1.1, size.y - r * 1.1))
 
@@ -333,7 +335,8 @@ func _draw() -> void:
 	if player and player.input_locked:
 		var bl := _buttons()
 		for name in bl:
-			PixelArt.draw_round_button(self, bl[name][0], bl[name][1], _pressed.has(name))
+			var col: Color = bl[name][2] if bl[name].size() > 2 else Color(1, 1, 1, 0.95)
+			PixelArt.draw_round_button(self, bl[name][0], bl[name][1], _pressed.has(name), Color(1.0, 0.82, 0.25), col)
 		return
 	if SkateInput.on_foot:
 		var mb := _move_base if _gesture_owner != -1 else _move_rest()
@@ -356,7 +359,7 @@ func _draw() -> void:
 			draw_circle(t.pos, 22.0, col)
 			if t.mode == SkateInput.Gesture.PUSH or t.mode == SkateInput.Gesture.REVERSE:
 				var dir := 1.0 if t.mode == SkateInput.Gesture.PUSH else -1.0
-				var end: Vector2 = t.start + Vector2(0, dir * SkateInput.stroke_length * get_viewport_rect().size.y)
+				var end: Vector2 = t.start + Vector2(0, dir * SkateInput.stroke_length * get_rect().size.y)
 				draw_line(end - Vector2(24, 0), end + Vector2(24, 0), Color(1, 1, 1, 0.5), 3.0)
 		if SkateInput.steer_mode == SkateInput.SteerMode.JOYSTICK or _joy_owner != -1:
 			var base := _joy_base if _joy_owner != -1 else _joy_rest()
@@ -364,7 +367,8 @@ func _draw() -> void:
 	var btns := _buttons()
 	for name in btns:
 		if _is_round(name):
-			PixelArt.draw_round_button(self, btns[name][0], btns[name][1], _pressed.has(name))
+			var col: Color = btns[name][2] if btns[name].size() > 2 else Color(1, 1, 1, 0.95)
+			PixelArt.draw_round_button(self, btns[name][0], btns[name][1], _pressed.has(name), Color(1.0, 0.82, 0.25), col)
 		else:
 			PixelArt.draw_button(self, btns[name][0], btns[name][1], _pressed.has(name))
 

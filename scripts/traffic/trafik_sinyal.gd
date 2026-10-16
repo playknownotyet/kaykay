@@ -51,8 +51,34 @@ static func car_state(j: int, arm: int, t: float) -> int:
 	return YESIL if u < sl.y else SARI
 
 
-## Aynı fazda yeşil yanan diğer kollar (sola dönen bunlardan gelene yol verir)
+## Işıklı kavşak mı? (ışıksızda ana yol öncelikli, yan yol yol verir)
+static func is_signalized(j: int) -> bool:
+	return not (_junctions[j].groups as Array).is_empty()
+
+
+## Işıksız kavşakta bu kol yol vermeli mi?
+static func must_yield(j: int, arm: int) -> bool:
+	var y: Array = _junctions[j].get("yield", [])
+	return y.has(float(arm)) or y.has(arm)
+
+
+## Işıksız kavşağın öncelikli gelen kolları
+static func main_arms(j: int) -> Array:
+	var out := []
+	for a in _junctions[j].get("main", []):
+		out.append(int(a))
+	return out
+
+
+## Aynı fazda yeşil yanan diğer kollar (sola dönen bunlardan gelene yol verir).
+## Işıksız kavşakta: öncelikli diğer kollar.
 static func same_phase(j: int, arm: int) -> Array:
+	if not is_signalized(j):
+		var m := main_arms(j)
+		if not m.has(arm):
+			return []
+		m.erase(arm)
+		return m
 	for g in _junctions[j].groups:
 		var arms: Array = g.arms
 		if arms.has(float(arm)) or arms.has(arm):
@@ -84,9 +110,11 @@ static func ped_state(j: int, t: float, arm := -1) -> int:
 ## yanan grubun yeşili boyunca o kolun geçidi (dönerek gelen arabalar yayaya yol verir).
 static func ped_time_left(j: int, t: float, arm := -1) -> float:
 	var J: Dictionary = _junctions[j]
+	if (J.groups as Array).is_empty():
+		return 99.0          # ışıksız: yaya geçidinde yaya önceliklidir, arabalar durur
 	var u := fposmod(t + float(J.offset), float(J.cycle))
 	var s0 := _ped_start(J)
-	var s1: float = s0 + _t.pedWalk + _t.pedFlash
+	var s1: float = s0 + float(_t.get("pedAll", _t.pedWalk + _t.pedFlash))
 	if u >= s0 and u < s1:
 		return s1 - u
 	if arm < 0:

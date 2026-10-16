@@ -85,8 +85,16 @@ func _ready() -> void:
 	add_child(look)
 	look.apply()
 
+	# Banklar: oyuncu ve NPC'ler oturabilir
+	var benches := Banklar.new()
+	benches.name = "Banklar"
+	benches.player = player
+	benches.level = level
+	world.add_child(benches)
+
 	# Hayvan NPC kalabalığı (yürüme ağı açılışta haritadan çıkarılır)
 	var crowd := NpcCrowd.new()
+	crowd.benches = benches
 	crowd.name = "Crowd"
 	crowd.player = player
 	crowd.camera = camera

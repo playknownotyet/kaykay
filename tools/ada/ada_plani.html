@@ -469,6 +469,37 @@ function buildRoads() {
   roads.push({ id: "plaza", name: "Meydan göbeği", kind: "plaza", width: P.ringW, pts: plz, closed: true });
   // Etek yolu
   ETEK = S.hill.etek ? etekLines() : [];
+  // Açık etek yolunun uçları çıkmaz kalmasın: her uç, çevre yolunun aynı yüksekliğe (tepe omzunda)
+  // tırmandığı en uygun noktaya kübik eğriyle bağlanır, çevre yoluna dik girer
+  for (const e of ETEK) {
+    if (e.closed) continue;
+    for (const atEnd of [false, true]) {
+      const pts = e.pts, n = pts.length;
+      const E = atEnd ? pts[n - 1] : pts[0], E2 = atEnd ? pts[n - 2] : pts[1];
+      let tl = Math.hypot(E.x - E2.x, E.y - E2.y) || 1;
+      const T = { x: (E.x - E2.x) / tl, y: (E.y - E2.y) / tl };
+      let best = null;
+      roads[0].pts.forEach((q, i) => {
+        const dx = q.x - E.x, dy = q.y - E.y, L = Math.hypot(dx, dy);
+        if (L < 12 || L > 140 || (dx * T.x + dy * T.y) < L * 0.2) return;
+        const dh = Math.abs(gridH(q.x, q.y) - ETEK_H);
+        const score = L + dh * 14;
+        if (!best || score < best.score) best = { q, i, L, score };
+      });
+      if (!best) continue;
+      const R = best.q, t = dirAt(roads[0].pts, best.i);
+      let nx = -t.y, ny = t.x; if (nx * (E.x - R.x) + ny * (E.y - R.y) < 0) { nx = -nx; ny = -ny; }
+      const L = best.L, c1 = { x: E.x + T.x * L / 3, y: E.y + T.y * L / 3 }, c2 = { x: R.x + nx * L / 3, y: R.y + ny * L / 3 };
+      const ext = [];
+      for (let k = 1; k <= 24; k++) {
+        const tt = k / 24, u = 1 - tt;
+        ext.push({ x: u * u * u * E.x + 3 * u * u * tt * c1.x + 3 * u * tt * tt * c2.x + tt * tt * tt * R.x,
+                   y: u * u * u * E.y + 3 * u * u * tt * c1.y + 3 * u * tt * tt * c2.y + tt * tt * tt * R.y });
+      }
+      e.pts = resample(atEnd ? pts.concat(ext) : ext.reverse().concat(pts), 5);
+      e.pts[atEnd ? e.pts.length - 1 : 0] = { x: R.x, y: R.y };
+    }
+  }
   ETEK.forEach((e, i) => roads.push({ id: "etek" + i, name: "Etek yolu" + (ETEK.length > 1 ? " " + (i + 1) : ""), kind: "street", width: S.inner.width, pts: e.pts, closed: e.closed }));
   const etekHit = (x, y) => { for (const e of ETEK) { const q = nearestOn(e.pts, x, y); if (q.d < 3) return { q, e }; } return null; };
 

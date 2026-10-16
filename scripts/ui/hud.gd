@@ -126,6 +126,7 @@ var _fps_log_timer := 0.0
 
 
 func _process(delta: float) -> void:
+	GuvenliAlan.fit(self)
 	if not player:
 		return
 	# Telefonda test: FPS'i log'a yaz (bilgisayardan adb logcat ile okunur)
@@ -144,7 +145,8 @@ func _notification(what: int) -> void:
 # ---------- Arayüz kurulumu ----------
 
 func _build() -> void:
-	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Güvenli alan (çentik / Dynamic Island / ana ekran çubuğu): bütün HUD onun içinde
+	GuvenliAlan.fit(self)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var vh := get_viewport_rect().size.y
 	var theme_res := Theme.new()
@@ -189,7 +191,7 @@ func _build() -> void:
 	_panel = PanelContainer.new()
 	_panel.visible = false
 	_panel.position = Vector2(12, vh * 0.17)
-	_panel.size = Vector2(get_viewport_rect().size.x * 0.46, vh * 0.86)
+	_panel.size = Vector2(size.x * 0.46, size.y - vh * 0.19)
 	add_child(_panel)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED

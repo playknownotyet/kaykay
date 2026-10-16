@@ -10,7 +10,10 @@
 // Koordinatlar plan düzleminde (x doğu, y kuzey, h). trafik.json Godot düzleminde (x, h, -y).
 
 // Aynı yolun iki kolu birlikte yeşil (ana yol uzun, yan yol kısa); sola dönen karşıdan gelene yol verir
-const TIMING = { greenMain: 22.0, greenSide: 12.0, yellow: 2.0, allRed: 1.0, pedWalk: 6.0, pedFlash: 3.0 };
+// pedAll: bütün yayalara yeşil ayrı fazı (0: yok; yayalar kendi kolunun trafiği kırmızıyken geçer)
+const TIMING = { greenMain: 18.0, greenSide: 10.0, yellow: 2.0, allRed: 1.0, pedWalk: 6.0, pedFlash: 3.0, pedAll: 0.0 };
+// Rütbe: ışıksız kavşakta hangi yol ana yol (öncelikli)
+const RANK = { ring: 4, plaza: 4, avenue: 3, serp: 2, street: 1 };
 const LIMIT = { ring: 13.9, avenue: 11.1, street: 8.3, serp: 9.7, plaza: 6.5 };
 const LIMIT_ID = { port: 5.5, summit: 5.5 };
 const KMH = (v) => Math.round(v * 3.6 / 10) * 10;
@@ -317,6 +320,20 @@ module.exports = function buildTraffic(ctx) {
   const hash = (k) => { let h = 2166136261; for (const ch of String(k)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; };
   for (const J of junctions) {
     const inArms = J.arms.filter((a) => a.incoming && lanes.some((l) => l.kind === "lane" && l.to === a));
+    // Işık yalnız büyük kavşaklarda (dört kol, göbek değil). Diğerlerinde ana yol öncelikli,
+    // yan yol yol verir (J.main: öncelikli gelen kollar, J.yield: yol veren kollar)
+    J.signal = J.arms.length >= 4 && !J.roundabout;
+    if (!J.signal) {
+      const count = new Map();
+      for (const a of J.arms) count.set(a.r, (count.get(a.r) || 0) + 1);
+      const rank = (a) => (RANK[a.r.kind] || 1) * 10 + (count.get(a.r) > 1 || a.r.kind === "plaza" ? 5 : 0);
+      const top = Math.max(...inArms.map(rank));
+      J.main = inArms.filter((a) => rank(a) === top).map((a) => a.idx);
+      J.yield = inArms.filter((a) => rank(a) !== top).map((a) => a.idx);
+      J.phases = []; J.groups = []; J.cycle = 1; J.offset = 0;
+      continue;
+    }
+    J.main = []; J.yield = [];
     J.phases = inArms.map((a) => a.idx);
     // Faz grupları: aynı yolun kolları birlikte
     const byRoad = new Map();
@@ -325,7 +342,7 @@ module.exports = function buildTraffic(ctx) {
     const isMain = (arms) => arms.length > 1 || J.arms[arms[0]].r.kind === "plaza";
     J.groups = [...byRoad.values()].map((arms) => ({ arms, g: isMain(arms) ? TIMING.greenMain : TIMING.greenSide }));
     J.groups.sort((a, b) => (isMain(b.arms) ? 1 : 0) - (isMain(a.arms) ? 1 : 0));
-    const cyc = J.groups.reduce((u, g) => u + g.g + TIMING.yellow + TIMING.allRed, 0) + TIMING.pedWalk + TIMING.pedFlash + TIMING.allRed;
+    const cyc = J.groups.reduce((u, g) => u + g.g + TIMING.yellow + TIMING.allRed, 0) + (TIMING.pedAll > 0 ? TIMING.pedAll + TIMING.allRed : 0);
     J.cycle = cyc;
     J.offset = hash(J.ji * 7.13) * cyc;
     // Göbek: yeşil dalga. Dolaşan araba her girişe yeşilin başında varsın (aynı döngü süresi)
@@ -344,12 +361,12 @@ module.exports = function buildTraffic(ctx) {
       if (arm.cw) {
         crosswalks.push({ ji: J.ji, arm: arm.idx, c: arm.cw.p, A: arm.cw.A, B: arm.cw.B, ax: arm.ax, ay: arm.ay, w: arm.w });
         arm.cwId = crosswalks.length - 1;
-        // Yaya ışıkları iki uçta, karşıya bakar (geçidin kavşak tarafının biraz dışında)
-        for (const [P, Q] of [[arm.cw.A, arm.cw.B], [arm.cw.B, arm.cw.A]]) {
+        // Yaya ışıkları iki uçta, karşıya bakar (geçidin kavşak tarafının biraz dışında); ışıksız kavşakta yok
+        if (J.signal) for (const [P, Q] of [[arm.cw.A, arm.cw.B], [arm.cw.B, arm.cw.A]]) {
           lights.push({ kind: "yaya", ji: J.ji, arm: arm.idx, x: P.x + arm.ax * 1.9, y: P.y + arm.ay * 1.9, h: P.h + CURB, fx: Q.x - P.x, fy: Q.y - P.y });
         }
       }
-      if (!arm.incoming || !J.phases.includes(arm.idx)) continue;
+      if (!arm.incoming || !(J.phases.includes(arm.idx) || J.yield.includes(arm.idx))) continue;
       // Gelen araç kavşağa doğru (-a) gider; sürüş yönünün sağı (-ay, ax) = R: gelen şerit R yanında
       const inSide = 1;
       const p = at(arm.r, arm.s0 + arm.dir * (arm.st - 0.4));
@@ -360,7 +377,7 @@ module.exports = function buildTraffic(ctx) {
       // Araç ışığı: dur çizgisinde, gelen şeridin sağ kaldırımında, gelen trafiğe bakar
       const q = at(arm.r, arm.s0 + arm.dir * arm.st);
       const o = half + 0.55;
-      lights.push({ kind: "arac", ji: J.ji, arm: arm.idx, x: q.x + Rx * inSide * o, y: q.y + Ry * inSide * o, h: q.h + CURB, fx: arm.ax, fy: arm.ay });
+      if (J.signal) lights.push({ kind: "arac", ji: J.ji, arm: arm.idx, x: q.x + Rx * inSide * o, y: q.y + Ry * inSide * o, h: q.h + CURB, fx: arm.ax, fy: arm.ay });
     }
   }
 
@@ -404,6 +421,11 @@ module.exports = function buildTraffic(ctx) {
     const kmh = KMH(limitOf(l.road));
     const P = placeRight(l, Math.min(18, l.len * 0.3));
     if (okSpot(P) && !near(P.x, P.y, `hiz_${kmh}`, 60)) signs.push({ key: `hiz_${kmh}`, ...P, kind: "levha" });
+    // Yol ver: ışıksız kavşağa yan yoldan gelirken
+    if (l.to && junctions[l.to.ji].yield && junctions[l.to.ji].yield.includes(l.to.idx) && !junctions[l.to.ji].roundabout) {
+      const Q = placeRight(l, l.len - 14);
+      if (okSpot(Q)) signs.push({ key: "yol_ver", ...Q, kind: "levha" });
+    }
     // Dönel kavşak: meydana giden caddelerde
     if (l.to && junctions[l.to.ji].roundabout && l.road.kind !== "plaza") {
       const Q = placeRight(l, l.len - 30);
@@ -559,7 +581,7 @@ module.exports = function buildTraffic(ctx) {
       j: l.kind === "lane" && l.to ? l.to.ji : -1, arm: l.kind === "lane" && l.to ? l.to.idx : -1,
       cj: l.kind === "conn" ? l.ji : -1, t: l.kind === "conn" ? l.turn : "", fa: l.kind === "conn" ? l.fromArm : -1,
     })),
-    junctions: junctions.map((J) => ({ p: G(J), phases: J.phases, groups: J.groups, cycle: r3(J.cycle), offset: r3(J.offset), arms: J.arms.length })),
+    junctions: junctions.map((J) => ({ p: G(J), phases: J.phases, groups: J.groups, cycle: r3(J.cycle), offset: r3(J.offset), arms: J.arms.length, main: J.main, yield: J.yield })),
     crosswalks: crosswalks.map((c) => ({ j: c.ji, arm: c.arm, a: G({ ...c.A, h: c.A.h + CURB }), b: G({ ...c.B, h: c.B.h + CURB }) })),
   };
   const street = {
