@@ -133,6 +133,8 @@ func _add_driver(rng: RandomNumberGenerator, npc_materials: Dictionary, roof: fl
 	if NO_DRIVE.has(species):
 		return
 	var recipe := NpcCatalog.make_recipe(rng, species)
+	# Oturunca kuyruk koltuktan ve araç tabanından aşağı sarkıyordu: sürücüde kuyruk yok
+	recipe.parts = recipe.parts.filter(func(n): return not String(n).begins_with("tur_kuyruk"))
 	var driver := Npc.build_model(recipe, npc_materials)
 	_model.add_child(driver)
 	_driver_anim = driver.find_child("AnimationPlayer", true, false)

@@ -683,6 +683,37 @@ for (let i = 0; i < S.harbor.piers; i++) {
 // Yükseklik ızgaraları (2 m): çarpışma (yollar tam yükseklikte) ve görüntü (yol altında
 // 0,3 m aşağıda, şevler yumuşak); zemin türü
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Test dükkanı (soygun / gizlilik denemesi): meydandan en uzun caddeye çıkınca, kaldırımın
+// hemen arkasında, yüzü yola dönük. Zemini düzlenir; tabela ve eşyalar uzak durur.
+// ---------------------------------------------------------------------------
+const SHOP = (() => {
+  const av = ROADS.filter((r) => r.kind === "avenue").sort((a, b) => b.prof.len - a.prof.len)[0];
+  const W = 10, D = 8, half = av.width / 2;
+  const c = av._cum;
+  for (const s0 of [70, 85, 100, 115, 130, 55, 145, 160]) {
+    let i = 0; while (i < c.length - 2 && c[i + 1] < s0) i++;
+    const p = av.pts[i], d = M.dirAt(av.pts, i), h = av.prof.h[i] + CURB;
+    for (const side of [1, -1]) {
+      const Rx = -d.y * side, Ry = d.x * side, front = half + SW + 0.7;
+      const cx = p.x + Rx * (front + D / 2), cy = p.y + Ry * (front + D / 2);
+      let ok = !JUNC.some((j) => Math.hypot(j.x - cx, j.y - cy) < 30);
+      for (const [u, v] of [[-W / 2 - 2, -D / 2], [W / 2 + 2, -D / 2], [-W / 2 - 2, D / 2 + 2], [W / 2 + 2, D / 2 + 2], [0, 0], [0, D / 2 + 2]]) {
+        const x = cx + d.x * u + Rx * v, y = cy + d.y * u + Ry * v;
+        const nr = nearestRoad(x, y);
+        if ((nr && nr.r !== av && nr.e < 4) || M.inland(x, y) < 10 || Math.abs(M.height(x, y) - h) > 4) ok = false;
+      }
+      if (ok) return { x: cx, y: cy, h, ux: d.x, uy: d.y, vx: Rx, vy: Ry, w: W, d: D, road: av.id };
+    }
+  }
+  return null;
+})();
+const inShop = (x, y, pad = 0) => {
+  if (!SHOP) return false;
+  const u = (x - SHOP.x) * SHOP.ux + (y - SHOP.y) * SHOP.uy, v = (x - SHOP.x) * SHOP.vx + (y - SHOP.y) * SHOP.vy;
+  return Math.abs(u) < SHOP.w / 2 + pad && Math.abs(v) < SHOP.d / 2 + pad;
+};
+
 const STEP = 2, EXT = Math.ceil(S.size * 0.64 / STEP) * STEP, N = Math.round(2 * EXT / STEP) + 1;
 const hCol = new Float32Array(N * N), hVis = new Float32Array(N * N), mat = new Uint8Array(N * N);
 const P = S.plaza;
@@ -731,6 +762,17 @@ for (let j = 0; j < N; j++) {
         if (dh > 2 && land >= 0 && w < 0.85) m = MAT.SOIL;
       }
     }
+    // Dükkan zemini: taban döşemesinin biraz altında, çevresi 5 m'de doğal araziye yumuşar
+    if (SHOP) {
+      const u = (x - SHOP.x) * SHOP.ux + (y - SHOP.y) * SHOP.uy, v = (x - SHOP.x) * SHOP.vx + (y - SHOP.y) * SHOP.vy;
+      const dd = Math.hypot(Math.max(Math.abs(u) - SHOP.w / 2 - 1, 0), Math.max(Math.abs(v) - SHOP.d / 2 - 1, 0));
+      if (dd < 5 && (!nr0 || nr0.d > nr0.half + SW + 0.2)) {
+        const w = smooth(0, 5, dd);
+        hc = (SHOP.h - 0.08) + (hc - SHOP.h + 0.08) * w;
+        hv = (SHOP.h - 0.3) + (hv - SHOP.h + 0.3) * w;
+        if (dd < 0.5) m = MAT.ROAD;
+      }
+    }
     const dp = Math.hypot(x - P.x, y - P.y);
     if (dp < P.r + 0.5) { hc = M.plazaH; hv = M.plazaH - 0.3; m = MAT.ROAD; }
     hCol[k] = hc; hVis[k] = hv; mat[k] = m;
@@ -747,7 +789,7 @@ for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
 // ---------------------------------------------------------------------------
 // Trafik (şeritler, ışıklar, yaya geçitleri, tabelalar): tools/ada/trafik.js
 // ---------------------------------------------------------------------------
-const TR = require("./trafik.js")({ M, S, ROADS, JUNC, nearestRoad, SW, CURB, r3, sidewalkRuns, islandAt, piers });
+const TR = require("./trafik.js")({ M, S, ROADS, JUNC, nearestRoad, SW, CURB, r3, sidewalkRuns, islandAt, piers, inShop });
 
 // ---------------------------------------------------------------------------
 // Yaya ağı: kaldırım ortası boyunca ~8 m'de bir düğüm, kavşaklarda karşıya geçitler
@@ -876,6 +918,7 @@ const data = {
   barrier: barrierRuns, piers, cornerFills, paved,
   walk: { nodes: nodes.map((n) => [n[0], n[1], n[2]]), edges, cross: walkCross },
   street: TR.street,
+  shop: SHOP && { x: r3(SHOP.x), y: r3(SHOP.y), h: r3(SHOP.h), u: [r3(SHOP.ux), r3(SHOP.uy)], v: [r3(SHOP.vx), r3(SHOP.vy)], w: SHOP.w, d: SHOP.d },
 };
 fs.writeFileSync(path.join(OUT_DIR, "ada.json"), JSON.stringify(data));
 fs.writeFileSync(path.join(OUT_DIR, "trafik.json"), JSON.stringify(TR.trafik));

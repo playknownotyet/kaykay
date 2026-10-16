@@ -396,7 +396,8 @@ module.exports = function buildTraffic(ctx) {
     return null;
   };
   const near = (x, y, key, R) => signs.some((s) => (!key || s.key === key) && Math.hypot(s.x - x, s.y - y) < R);
-  const okSpot = (P) => P && walkable(P.x, P.y) && !lights.some((L) => Math.hypot(L.x - P.x, L.y - P.y) < 2.5);
+  const inShop = ctx.inShop || (() => false);
+  const okSpot = (P) => P && walkable(P.x, P.y) && !inShop(P.x, P.y, 3) && !lights.some((L) => Math.hypot(L.x - P.x, L.y - P.y) < 2.5);
   for (const l of lanes) {
     if (l.kind !== "lane" || l.len < 45) continue;
     // Hız sınırı: şeridin başında (kavşaktan çıkınca)
@@ -467,7 +468,7 @@ module.exports = function buildTraffic(ctx) {
     const p = at(r, s), Rx = -p.dy * side, Ry = p.dx * side, o = r.width / 2 + SW + 6;
     const x = p.x + Rx * o, y = p.y + Ry * o;
     const nr = nearestRoad(x, y);
-    if (M.inland(x, y) < 12 || (nr && nr.e < 4.5) || JUNC.some((j) => Math.hypot(j.x - x, j.y - y) < 45)) return false;
+    if (M.inland(x, y) < 12 || (nr && nr.e < 4.5) || JUNC.some((j) => Math.hypot(j.x - x, j.y - y) < 45) || inShop(x, y, 12)) return false;
     if (boards.some((b) => Math.hypot(b.x - x, b.y - y) < 160)) return false;
     boards.push({ x, y, h: p.h, fx: -Rx * 0.9 + p.dx * 0.44 * side, fy: -Ry * 0.9 + p.dy * 0.44 * side, idx: boards.length });
     return true;
@@ -487,7 +488,7 @@ module.exports = function buildTraffic(ctx) {
     crosswalks.some((c) => Math.hypot(c.A.x - x, c.A.y - y) < 3.5 || Math.hypot(c.B.x - x, c.B.y - y) < 3.5);
   const nearJ = (x, y, R) => JUNC.some((j) => Math.hypot(j.x - x, j.y - y) < R);
   const put = (t, x, y, h, fx, fy, R = 1.6) => {
-    if (!walkable(x, y) || busy(x, y, R) || nearJ(x, y, 13)) return false;
+    if (!walkable(x, y) || busy(x, y, R) || nearJ(x, y, 13) || inShop(x, y, 3)) return false;
     props.push({ t, x, y, h, fx, fy });
     return true;
   };

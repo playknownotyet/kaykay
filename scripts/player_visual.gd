@@ -14,8 +14,9 @@ extends Node3D
 
 const MODEL := preload("res://assets/karakter/karakter.glb")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
-const STATES := ["ride", "push", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount", "dus", "tutun", "yaya_hava", "yaya_dus"]
-const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "brake", "air", "grind", "walk", "run", "stand_idle", "tutun", "yaya_hava"]
+const STATES := ["ride", "push", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount", "dus", "tutun", "yaya_hava", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "canta_acik",
+	"eline_al", "cantaya_koy", "havada_cirpin"]
+const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "brake", "air", "grind", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut"]
 ## Ollie animasyonunda fiziksel sıçramanın olduğu an (karakter_rig.py OLLIE_POP_FRAME / 30)
 const OLLIE_POP_TIME := 0.1
 
@@ -68,6 +69,21 @@ var _step_phase := 0.0
 var _air_t := 0.0            # kesintisiz havada geçen süre
 var _ollie_t := 0.0          # son ollie'den beri (ollie'de hava pozu hemen gelir)
 var _turn_blend := 0.0
+var _hold_blend := 0.0
+var _skel: Skeleton3D
+var _hand_l := -1
+
+
+## Eldeki eşyanın düğümü sol ele oturur (eşyanın kökü avucun biraz altında)
+func _update_held_node() -> void:
+	var n := controller.held_node
+	if n == null or not is_instance_valid(n):
+		return
+	if _skel == null:
+		_skel = _model.find_child("Skeleton3D", true, false)
+		_hand_l = _skel.find_bone("hand.L")
+	var hand := _skel.global_transform * _skel.get_bone_global_pose(_hand_l).origin
+	n.global_position = hand - Vector3.UP * 0.12
 
 
 func _ready() -> void:
@@ -77,7 +93,15 @@ func _ready() -> void:
 		if _air_t > 0.25 or impact > 2.0:
 			_land_timer = 0.18)
 	controller.ollied.connect(_on_ollied)
+	# Kaldırım zıplaması: kısa ollie pozu ("pat" anından), yazı yok
+	controller.auto_hopped.connect(func():
+		_ollie_t = 0.0
+		_start_special("ollie", OLLIE_POP_TIME))
 	controller.stumbled.connect(_on_stumbled)
+	controller.action_started.connect(func(n: String):
+		_state = ""
+		_set_state(n)
+		_tree.set("parameters/%s_seek/seek_request" % n, 0.0))
 	controller.knocked_down.connect(func():
 		# Sarsılma üstüne binmiş olabilir: kesilir, yalnız düşme oynar
 		_tree.set("parameters/sarsil_shot/request", AnimationNodeOneShot.ONE_SHOT_REQUEST_ABORT)
@@ -205,13 +229,13 @@ func _setup_animation() -> void:
 		bt.connect_node("state", STATES.find(st), st + "_scale")
 
 	# Zıplamalar: bir noktadan başlatılabilir (rampadan / raydan çıkışta "pat" anından)
-	for st in ["ollie", "flip", "dus", "yaya_dus"]:
+	for st in ["ollie", "flip", "dus", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "eline_al", "cantaya_koy"]:
 		bt.add_node(st + "_anim", anim.call(st))
 		bt.add_node(st + "_seek", AnimationNodeTimeSeek.new())
 		bt.connect_node(st + "_seek", 0, st + "_anim")
 		bt.connect_node("state", STATES.find(st), st + "_seek")
 
-	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount", "tutun", "yaya_hava"]:
+	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin"]:
 		bt.add_node(st, anim.call(st))
 		bt.connect_node("state", STATES.find(st), st)
 
@@ -221,7 +245,16 @@ func _setup_animation() -> void:
 	shot.fadeout_time = 0.18
 	bt.add_node("sarsil_shot", shot)
 	bt.add_node("sarsil_anim", anim.call("sarsil"))
-	bt.connect_node("sarsil_shot", 0, "state")
+	# Elde eşya: sol kol "elde_tut" pozunda (yürürken de); yalnız sol kol kemikleri karışır
+	var hold := AnimationNodeBlend2.new()
+	hold.filter_enabled = true
+	for path in _bone_track_paths(["upper_arm.L", "forearm.L", "hand.L"]):
+		hold.set_filter_path(path, true)
+	bt.add_node("hold", hold)
+	bt.add_node("hold_anim", anim.call("elde_tut"))
+	bt.connect_node("hold", 0, "state")
+	bt.connect_node("hold", 1, "hold_anim")
+	bt.connect_node("sarsil_shot", 0, "hold")
 	bt.connect_node("sarsil_shot", 1, "sarsil_anim")
 	bt.connect_node("output", 0, "sarsil_shot")
 
@@ -232,6 +265,18 @@ func _setup_animation() -> void:
 	_tree.set("parameters/push_scale/scale", 0.0)
 	_tree.active = true
 	_set_state("ride")
+
+
+## Kemik iz yolları (AnimationTree filtresi için): "walk" animasyonundaki izlerden
+func _bone_track_paths(bones: Array) -> Array:
+	var out := []
+	var a := _anim.get_animation("walk")
+	for i in a.get_track_count():
+		var path := a.track_get_path(i)
+		var sub := String(path.get_concatenated_subnames())
+		if sub in bones and not out.has(path):
+			out.append(path)
+	return out
 
 
 func _set_state(st: String) -> void:
@@ -247,8 +292,14 @@ func _update_animation() -> void:
 	var st := "ride"
 	var push_t := -1.0
 
-	if controller.fall_time > 0.0:
+	if controller.held_in_air:
+		st = "havada_cirpin"
+	elif controller.fall_time > 0.0:
 		st = "yaya_dus" if controller.fall_on_foot else "dus"
+	elif controller.action_time > 0.0 and controller.action_name != "":
+		st = controller.action_name
+	elif controller.bag_open and controller.on_foot:
+		st = "canta_acik"
 	elif controller.skitch_car:
 		st = "tutun"
 	elif controller.board_anim == SkateController.BoardAnim.MOUNTING:
@@ -295,6 +346,12 @@ func _update_animation() -> void:
 	var turn := controller.steer * clampf(absf(controller.speed) / 3.0, 0.0, 1.0)
 	_turn_blend = lerpf(_turn_blend, turn, 1.0 - exp(-8.0 * dt))
 	_tree.set("parameters/ride_speed/blend_amount", _speed_blend)
+	# Elde eşya: sol kol tutuş pozunda (alma / koyma / düşme sırasında kapalı)
+	var want_hold := 1.0 if controller.held_item != "" and controller.on_foot and controller.action_time <= 0.0 \
+		and controller.fall_time <= 0.0 and not controller.held_in_air else 0.0
+	_hold_blend = lerpf(_hold_blend, want_hold, 1.0 - exp(-12.0 * dt))
+	_tree.set("parameters/hold/blend_amount", _hold_blend)
+	_update_held_node()
 	_tree.set("parameters/ride_turn/blend_amount", _turn_blend)
 
 

@@ -58,6 +58,8 @@ def deform_bones():
         "neck": ((0, 0.005, 1.10), (0, 0.01, 1.18), "chest"),
         "head": ((0, 0.01, 1.18), (0, 0.01, 1.42), "neck"),
         "board": ((0, 0, 0), (0, -0.3, 0), None),
+        # Sırt çantası: kısıtlarla ya sırtta (göğse bağlı) ya sol elde (bkz. add_bag_bones)
+        "canta": ((0, 0.18, 0.96), (0, 0.18, 1.08), None),
     }
     for side, sfx in ((1, "L"), (-1, "R")):
         s, e, w, h = arm(side)
@@ -206,7 +208,7 @@ def assign_weights(obj, arm_obj):
             add("foot.L" if p.x > 0 else "foot.R", v.index, 1.0)
             continue
         if name in CHEST_PARTS:
-            add("chest", v.index, 1.0)
+            add("canta", v.index, 1.0)
             continue
         # Tişört eteği ve pantolon beli aynı kemikle (hips) hareket eder:
         # böylece pantolon tişörtün içinden dışarı taşmaz.
@@ -334,6 +336,10 @@ def apply_pose(arm_obj, pose):
     con = pb["board"].constraints.get("Tasima")
     if con:
         con.influence = pose.get("carry", 0.0)
+    if "canta" in pb:
+        bc = pb["canta"].constraints.get("El")
+        if bc:
+            bc.influence = pose.get("bag", 0.0)
 
 
 def key_pose(arm_obj, frame, pose):
@@ -344,6 +350,10 @@ def key_pose(arm_obj, frame, pose):
     con = arm_obj.pose.bones["board"].constraints.get("Tasima")
     if con:
         con.keyframe_insert("influence", frame=frame)
+    if "canta" in arm_obj.pose.bones:
+        bc = arm_obj.pose.bones["canta"].constraints.get("El")
+        if bc:
+            bc.keyframe_insert("influence", frame=frame)
 
 
 def new_action(arm_obj, name):
@@ -383,6 +393,65 @@ def stand_pose(**over):
     p["carry"] = 1.0
     p.update(over)
     return p
+
+
+BAG_HOLD_HAND = (0.13, -0.3, 0.9)
+
+
+def bag_hold_pose(**over):
+    p = stand_pose(**over)
+    p["hand.L"] = BAG_HOLD_HAND
+    p["hand_rot.L"] = (-20, 0, 25)
+    p["elbow.L"] = (0.32, 0.2, 0.7)
+    p["head_rot"] = (22, -6, 0)
+    p["spine_rot"] = (6, 0, 0)
+    return p
+
+
+def add_bag_bones(arm_obj):
+    """Çanta iki yerde durabilir: sırtta (göğse bağlı) ya da sol elde, önde. Kısıt etkisi
+    (bag) animasyonda anahtarlanır. Tutuş pozunda elin dönüşümü ölçülüp yardımcı kemik ona göre konur."""
+    apply_pose(arm_obj, bag_hold_pose())
+    bpy.context.view_layer.update()
+    hand_pose = arm_obj.pose.bones["hand.L"].matrix.copy()
+    hand_rest = arm_obj.data.bones["hand.L"].matrix_local.copy()
+    chest_rest = arm_obj.data.bones["chest"].matrix_local.copy()
+    bag_rest = arm_obj.data.bones["canta"].matrix_local.copy()
+    # Elde: göğsün önünde, sırt yüzü karaktere dönük (Z ekseni etrafında 180°), üstü hafif öne
+    hold = Matrix.Translation((0.03, -0.34, 0.88)) @ Matrix.Rotation(math.radians(180), 4, 'Z') @ \
+        Matrix.Rotation(math.radians(-15), 4, 'X') @ Matrix.Translation(-Vector(bag_rest.translation)) @ bag_rest
+    hand_helper = hand_rest @ hand_pose.inverted() @ hold
+    bpy.context.view_layer.objects.active = arm_obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = arm_obj.data.edit_bones
+    sb = eb.new("canta_sirt")
+    sb.head = (0, 0, 0)
+    sb.tail = (0, 0.12, 0)
+    sb.matrix = bag_rest
+    sb.parent = eb["chest"]
+    sb.use_deform = False
+    hb = eb.new("canta_el")
+    hb.head = (0, 0, 0)
+    hb.tail = (0, 0.12, 0)
+    hb.matrix = hand_helper
+    hb.parent = eb["hand.L"]
+    hb.use_deform = False
+    bpy.ops.object.mode_set(mode='POSE')
+    pc = arm_obj.pose.bones["canta"]
+    c1 = pc.constraints.new('COPY_TRANSFORMS')
+    c1.name = "Sirt"
+    c1.target = arm_obj
+    c1.subtarget = "canta_sirt"
+    c1.influence = 1.0
+    c2 = pc.constraints.new('COPY_TRANSFORMS')
+    c2.name = "El"
+    c2.target = arm_obj
+    c2.subtarget = "canta_el"
+    c2.influence = 0.0
+    for n in ("canta_sirt", "canta_el"):
+        arm_obj.pose.bones[n].rotation_mode = 'XYZ'
+    bpy.ops.object.mode_set(mode='OBJECT')
+    rest_heads(arm_obj)
 
 
 def add_carry_bone(arm_obj):
@@ -898,6 +967,114 @@ def make_actions(arm_obj):
             pose["hand_rot.L"] = (40, 0, 10)
         key_pose(arm_obj, f, pose)
 
+    # --- Çantaya atma (soygun): sol elle öndeki eşyaya uzanır (kaykay sağ elde), alır, omzunun
+    #     üstünden sırt çantasına atar, toparlanır. Godot: CANTA_FRAMES / 30 sn; eşya elde
+    #     CANTA_GRAB..CANTA_DROP arasında taşınır (soygun.gd ile aynı). ---
+    act("cantaya_at")
+    canta_keys = [
+        # kare, kalça delta, gövde, kafa, sol el, sol el dönüşü, dirsek
+        (0, (0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), (0.25, 0.02, 0.63), (-12, 0, 8), None),
+        (6, (0, -0.04, -0.06), (22, -10, 0), (-14, -8, 0), (0.24, -0.34, 0.74), (-60, 0, 20), (0.42, 0.1, 0.7)),
+        (11, (0, -0.06, -0.08), (26, -12, 0), (-16, -10, 0), (0.2, -0.46, 0.8), (-80, 0, 20), (0.45, 0.0, 0.75)),
+        (15, (0, -0.05, -0.06), (20, -8, 0), (-10, -6, 0), (0.2, -0.42, 0.82), (-80, 0, 20), (0.45, 0.0, 0.75)),
+        (21, (0, 0.0, -0.02), (2, 14, 4), (6, 20, 0), (0.26, -0.05, 1.05), (-150, 0, 10), (0.4, 0.05, 0.85)),
+        (26, (0, 0.02, -0.012), (-4, 22, 6), (8, 28, 0), (0.16, 0.2, 1.02), (-190, 0, 0), (0.38, 0.2, 0.95)),
+        (30, (0, 0.02, -0.012), (-4, 22, 6), (6, 26, 0), (0.15, 0.22, 0.98), (-190, 0, 0), (0.38, 0.2, 0.95)),
+        (36, (0, 0.0, -0.012), (2, 6, 0), (0, 8, 0), (0.26, 0.05, 0.7), (-30, 0, 10), None),
+        (42, (0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), (0.25, 0.02, 0.63), (-12, 0, 8), None),
+    ]
+    for f, hips, spine, head, hl, hrot, elbow in canta_keys:
+        pose = stand_pose(hips=hips, spine_rot=spine, head_rot=head,
+                          chest_rot=(spine[0] * 0.3, spine[1] * 0.5, spine[2] * 0.4))
+        pose["hand.L"] = hl
+        pose["hand_rot.L"] = hrot
+        if elbow:
+            pose["elbow.L"] = elbow
+        key_pose(arm_obj, f, pose)
+
+    # --- Çantayı aç: sol el omuzdaki askıya uzanır, çantayı sırttan çekip öne getirir, bakar ---
+    act("canta_ac")
+    ac_keys = [
+        (0, stand_pose(), 0.0),
+        (6, stand_pose(spine_rot=(2, -14, 0), head_rot=(0, -20, 0), **{"hand.L": (0.15, 0.1, 1.06), "hand_rot.L": (-150, 0, 10),
+                                                                       "elbow.L": (0.4, 0.1, 0.95)}), 0.0),
+        (9, stand_pose(spine_rot=(2, -16, 0), head_rot=(0, -22, 0), **{"hand.L": (0.15, 0.16, 1.05), "hand_rot.L": (-160, 0, 10),
+                                                                       "elbow.L": (0.42, 0.12, 0.95)}), 0.0),
+        (15, stand_pose(spine_rot=(4, -8, 0), head_rot=(10, -12, 0), **{"hand.L": (0.3, -0.1, 0.98), "hand_rot.L": (-60, 0, 30),
+                                                                       "elbow.L": (0.42, 0.2, 0.8)}), 0.85),
+        (20, bag_hold_pose(), 1.0),
+        (24, bag_hold_pose(hips=(0, 0, -0.02)), 1.0),
+    ]
+    for f, pose, bag in ac_keys:
+        pose["bag"] = bag
+        key_pose(arm_obj, f, pose)
+    # Çantayı kapat: tersi
+    act("canta_kapat")
+    for f, pose, bag in reversed(ac_keys):
+        pose["bag"] = bag
+        key_pose(arm_obj, 24 - f, pose)
+    # Açık çantaya bakarken bekleme
+    act("canta_acik")
+    for f, k in ((0, 0.0), (20, 1.0), (40, 0.0)):
+        pose = bag_hold_pose(hips=(0, 0, -0.02 - 0.006 * k))
+        pose["hand.L"] = (BAG_HOLD_HAND[0], BAG_HOLD_HAND[1], BAG_HOLD_HAND[2] + 0.01 * k)
+        pose["bag"] = 1.0
+        key_pose(arm_obj, f, pose)
+
+    # --- Eline al: sol elle öndeki eşyaya uzanır, alır, göğsünün önüne getirir (eşya elde kalır) ---
+    HOLD_ITEM = (0.17, -0.27, 0.84)
+    act("eline_al")
+    al_keys = [
+        (0, (0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), (0.25, 0.02, 0.63), (-12, 0, 8), None),
+        (6, (0, -0.04, -0.06), (22, -10, 0), (-14, -8, 0), (0.24, -0.34, 0.74), (-60, 0, 20), (0.42, 0.1, 0.7)),
+        (10, (0, -0.06, -0.08), (26, -12, 0), (-16, -10, 0), (0.2, -0.46, 0.8), (-80, 0, 20), (0.45, 0.0, 0.75)),
+        (13, (0, -0.05, -0.06), (20, -8, 0), (-10, -6, 0), (0.2, -0.42, 0.82), (-80, 0, 20), (0.45, 0.0, 0.75)),
+        (20, (0, 0.0, -0.012), (4, 0, 0), (8, 0, 0), HOLD_ITEM, (-70, 0, 20), (0.36, 0.25, 0.72)),
+    ]
+    for f, hips, spine, head, hl, hrot, elbow in al_keys:
+        pose = stand_pose(hips=hips, spine_rot=spine, head_rot=head, chest_rot=(spine[0] * 0.3, spine[1] * 0.5, spine[2] * 0.4))
+        pose["hand.L"], pose["hand_rot.L"] = hl, hrot
+        if elbow:
+            pose["elbow.L"] = elbow
+        key_pose(arm_obj, f, pose)
+    # Elde tutma (yürürken sol kola bindirilir)
+    act("elde_tut")
+    for f in (0, 20):
+        pose = stand_pose()
+        pose["hand.L"], pose["hand_rot.L"], pose["elbow.L"] = HOLD_ITEM, (-70, 0, 20), (0.36, 0.25, 0.72)
+        key_pose(arm_obj, f, pose)
+    # Çantaya koy: göğüsteki eşyayı omzun üstünden sırt çantasına (14. karede çantada)
+    act("cantaya_koy")
+    koy_keys = [
+        (0, (0, 0.0, -0.012), (4, 0, 0), (8, 0, 0), HOLD_ITEM, (-70, 0, 20), (0.36, 0.25, 0.72)),
+        (8, (0, 0.0, -0.02), (2, 14, 4), (6, 20, 0), (0.26, -0.05, 1.05), (-150, 0, 10), (0.4, 0.05, 0.85)),
+        (14, (0, 0.02, -0.012), (-4, 22, 6), (8, 28, 0), (0.16, 0.2, 1.02), (-190, 0, 0), (0.38, 0.2, 0.95)),
+        (17, (0, 0.02, -0.012), (-4, 22, 6), (6, 26, 0), (0.15, 0.22, 0.98), (-190, 0, 0), (0.38, 0.2, 0.95)),
+        (24, (0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), (0.25, 0.02, 0.63), (-12, 0, 8), None),
+    ]
+    for f, hips, spine, head, hl, hrot, elbow in koy_keys:
+        pose = stand_pose(hips=hips, spine_rot=spine, head_rot=head, chest_rot=(spine[0] * 0.3, spine[1] * 0.5, spine[2] * 0.4))
+        pose["hand.L"], pose["hand_rot.L"] = hl, hrot
+        if elbow:
+            pose["elbow.L"] = elbow
+        key_pose(arm_obj, f, pose)
+
+    # --- Havada çırpınma: dükkan sahibi tişörtünden tutup kaldırmış; bacaklar tekmeler, kollar
+    #     çırpınır (kaykay sağ elde). Kökü Godot'ta sahibin ellerine göre taşınır. ---
+    act("havada_cirpin")
+    n = 16
+    for f in range(0, n + 1, 2):
+        ph = math.tau * f / n
+        pose = stand_pose(hips=(0, 0.0, -0.03), spine_rot=(-8, 6 * math.sin(ph), 0), head_rot=(-12, 18 * math.sin(ph * 2), 0))
+        pose["foot.L"] = (0.1, -0.08 + 0.12 * math.sin(ph), 0.12 + 0.1 * max(0.0, math.sin(ph)))
+        pose["foot.R"] = (-0.1, -0.08 - 0.12 * math.sin(ph), 0.12 + 0.1 * max(0.0, -math.sin(ph)))
+        pose["knee.L"] = (0.15, -0.8, 0.5)
+        pose["knee.R"] = (-0.15, -0.8, 0.5)
+        pose["hand.L"] = (0.42, -0.05 + 0.12 * math.sin(ph * 2), 0.95 + 0.1 * math.cos(ph * 2))
+        pose["hand_rot.L"] = (-20, 0, 40)
+        pose.update({"elbow.L": RAISED_ELBOWS["elbow.L"]})
+        key_pose(arm_obj, f, pose)
+
     # --- Tutunma (skitching): arabanın arkasına sağ elle tutunmuş, çömelik, sol kol dengede.
     #     El, kökün 0,6 m önünde tampon yüksekliğinde (Godot'ta SKITCH_GAP ile aynı) ---
     act("tutun")
@@ -953,6 +1130,7 @@ def main():
     skin_character(arm_obj)
     skin_board(arm_obj)
     add_carry_bone(arm_obj)
+    add_bag_bones(arm_obj)
     acts = make_actions(arm_obj)
     bpy.context.scene.render.fps = FPS
 

@@ -1668,6 +1668,39 @@ def standard_actions(A, style=None, secondary=None):
         sec(pose, "stumble", f / 36.0, f)
         A.key(f, pose)
 
+    # --- Dışarı at (dükkân sahibi): çocuğu tişörtünden iki eliyle tutar (eller yerden ~0,95 m,
+    #     önde), hafif kaldırır, geriye alıp kapıdan dışarı fırlatır, ellerini silkeler.
+    #     Godot (dukkan.gd): 12. karede tutar, 34. karede bırakır; 60 kare.
+    A.action("disari_at")
+    grab_z, lift_z = 0.95, 1.22
+    keys = [
+        # kare, gövde öne, eller (y, z), eller arası, kafa
+        (0, 0, None, 0.0, 0),
+        (8, 16, (-0.42, grab_z), 0.12, 12),
+        (12, 18, (-0.4, grab_z), 0.1, 14),
+        (20, 6, (-0.36, lift_z), 0.1, 4),
+        (26, -6, (-0.22, lift_z - 0.02), 0.1, -4),
+        (32, 20, (-0.72, lift_z + 0.12), 0.13, 10),
+        (34, 22, (-0.76, lift_z + 0.1), 0.18, 10),
+        (42, 8, None, 0.0, 6),
+        (48, 4, (-0.24, B.shoulder_z - 0.35), 0.03, 8),
+        (52, 4, (-0.24, B.shoulder_z - 0.35), 0.16, 8),
+        (56, 4, (-0.24, B.shoulder_z - 0.35), 0.03, 8),
+        (60, 0, None, 0.0, 0),
+    ]
+    for f, lean, hands, gap, head in keys:
+        pose = A.stand()
+        A.add_rot(pose, "spine", (lean * 0.6, 0, 0))
+        A.add_rot(pose, "chest", (lean * 0.4, 0, 0))
+        A.spread_neck(pose, (head, 0, 0), 0.5)
+        if hands:
+            for sfx, side in (("L", 1), ("R", -1)):
+                pose[f"hand.{sfx}"] = (gap * side, hands[0], hands[1])
+                pose[f"elbow.{sfx}"] = ((B.shoulder_w + 0.25) * side, 0.2, B.shoulder_z - 0.4)
+                pose[f"hand_rot.{sfx}"] = (-60, 0, 20 * side)
+        sec(pose, "idle", 0.0, f)
+        A.key(f, pose)
+
     # --- Araba sürme: oturmuş (kalça diz yüksekliğinde, uyluklar yatay), eller direksiyonda;
     #     direksiyon hafifçe sağa sola, kafa yola bakıp ara sıra yana döner. Godot'ta kalça
     #     kemiği koltuğa oturtulur. ---
@@ -1690,8 +1723,12 @@ def standard_actions(A, style=None, secondary=None):
         A.spread_neck(pose, (8, look, 0), 0.5)
         for sfx, side in (("L", 1), ("R", -1)):
             hp, kn, an, _ = B.leg_points(side)
-            pose[f"foot.{sfx}"] = (hp.x * 1.1, -thigh - 0.04, 0.085)
-            pose[f"knee.{sfx}"] = (hp.x * 1.4, -thigh - 0.8, B.knee_z + 0.6)
+            # Bacaklar torpidonun altına uzanır, ayaklar koltuğun hemen altında: aracın tabanından
+            # aşağı sarkmaz (ayaklar yerdeyken araç tabanının altından görünüyordu)
+            shin = B.knee_z - 0.085
+            seat_z = B.hip_z - drop
+            pose[f"foot.{sfx}"] = (hp.x * 1.1, -thigh - shin * 0.85, seat_z - 0.14)
+            pose[f"knee.{sfx}"] = (hp.x * 1.4, -thigh * 0.8, seat_z + 1.0)
             a = turn + (0 if side > 0 else math.pi)
             pose[f"hand.{sfx}"] = (math.cos(a) * wheel_r, wheel_y, wheel_z + math.sin(a) * wheel_r)
             pose[f"elbow.{sfx}"] = ((B.shoulder_w + 0.12) * side, 0.35, sz - 0.45)

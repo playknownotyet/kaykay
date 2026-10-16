@@ -105,6 +105,16 @@ func _ready() -> void:
 		traffic.count = 0
 	world.add_child(traffic)
 
+	# Test dükkanı (soygun / gizlilik denemesi)
+	if level.has_meta("dukkan"):
+		var shop := Dukkan.new()
+		shop.name = "Dukkan"
+		shop.player = player
+		shop.follow_cam = camera
+		shop.transform = level.get_meta("dukkan")
+		world.add_child(shop)
+		look.add_root(shop)
+
 	var ui := CanvasLayer.new()
 	ui.layer = 2
 	add_child(ui)

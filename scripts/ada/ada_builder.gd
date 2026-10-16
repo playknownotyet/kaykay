@@ -13,6 +13,8 @@ const BIN_PATH := "res://assets/ada/ada_h.bin"
 const TOON := preload("res://shaders/toon_char.gdshader")
 const TERRAIN_SHADER := preload("res://shaders/terrain.gdshader")
 const COBBLE_SHADER := preload("res://shaders/cobble.gdshader")
+const KALDIRIM_SHADER := preload("res://shaders/kaldirim.gdshader")
+const BORDUR_SHADER := preload("res://shaders/bordur.gdshader")
 
 ## Arazi parçası (m) ve ayrıntı seviyeleri: yakın 4 m ızgara, uzak 16 m
 const CHUNK := 128.0
@@ -82,6 +84,12 @@ func build() -> void:
 		edges.append(int(e[1]))
 	set_meta("walk_nodes", nodes)
 	set_meta("walk_edges", edges)
+	# Test dükkanı: köken kapı ortası (zemin), -Z içeri
+	var shop: Variant = data.get("shop")
+	if shop is Dictionary:
+		var into := _gdir(shop.v[0], shop.v[1])
+		var door := p3(shop.x - shop.v[0] * shop.d * 0.5, shop.y - shop.v[1] * shop.d * 0.5, shop.h)
+		set_meta("dukkan", Transform3D(Basis.looking_at(into, Vector3.UP), door))
 
 
 # ---------- Malzeme ----------
@@ -371,30 +379,49 @@ func _build_sidewalks() -> void:
 	var curb: float = data.curb
 	var top := PackedVector3Array()
 	var top_idx := PackedInt32Array()
+	var top_uv := PackedVector2Array()
+	var top_col := PackedColorArray()
 	var face := PackedVector3Array()
 	var face_idx := PackedInt32Array()
+	var face_uv := PackedVector2Array()
 	for run in data.sidewalks:
 		var pts: Array = run.pts
-		# Üst yüzey: iç kenardan dış kenara, bordür yüksekliğinde
+		# Plaklar kaldırım boyunca dizilsin: UV x = iç kenar boyunca mesafe, y = bordürden dışa.
+		# Ada yelpazelerinde (dış uç tek nokta) dünya koordinatı (renk alfa 0)
+		var along := String(run.road) != "ada"
 		var b := top.size()
-		for p in pts:
+		var u := 0.0
+		for i in pts.size():
+			var p: Array = pts[i]
+			if i > 0:
+				var o: Array = pts[i - 1]
+				u += Vector2(p[0] - o[0], p[1] - o[1]).length()
 			top.append(p3(p[0], p[1], p[4] + curb))
 			top.append(p3(p[2], p[3], p[4] + curb))
+			var w := Vector2(p[2] - p[0], p[3] - p[1]).length()
+			top_uv.append_array([Vector2(u, 0.0), Vector2(u, w)])
+			var flag := Color(1, 1, 1, 1.0 if along else 0.0)
+			top_col.append_array([flag, flag])
 		for i in pts.size() - 1:
 			var k := b + i * 2
 			top_idx.append_array([k, k + 2, k + 1, k + 1, k + 2, k + 3])
 		# Bordür yüzü (yola bakar) ve dış yüz (araziye iner, dışa bakar); tek yüzlü:
 		# iki yüzlü üçgenlerin normalleri birbirini sıfırlıyor, yüzey titriyordu
 		for edge in [[0, 1, 0.02, 2, 3], [2, 3, -1.2, 0, 1]]:
+			var ue := 0.0
 			for i in pts.size() - 1:
 				var p: Array = pts[i]
 				var q: Array = pts[i + 1]
 				var top0 := p3(p[edge[0]], p[edge[1]], p[4] + curb)
 				var top1 := p3(q[edge[0]], q[edge[1]], q[4] + curb)
-				if top0.distance_squared_to(top1) < 0.0001:
+				var seg := top0.distance_to(top1)
+				if seg < 0.01:
 					continue
 				var inside := (p3(p[edge[3]], p[edge[4]], p[4]) + p3(q[edge[3]], q[edge[4]], q[4])) * 0.5
 				_quad_out(top0, top1, p3(q[edge[0]], q[edge[1]], q[4] + edge[2]), p3(p[edge[0]], p[edge[1]], p[4] + edge[2]), inside, face, face_idx)
+				var depth: float = curb - float(edge[2])
+				face_uv.append_array([Vector2(ue, 0.0), Vector2(ue + seg, 0.0), Vector2(ue + seg, depth), Vector2(ue, depth)])
+				ue += seg
 		# Uç kapakları: kaldırım bir yerde bitiyorsa altı açık görünmesin (kapalı halkada yok)
 		var f0: Array = pts[0]
 		var f1: Array = pts[pts.size() - 1]
@@ -404,9 +431,23 @@ func _build_sidewalks() -> void:
 				var o: Array = pts[e[1]]
 				var inside := p3((o[0] + o[2]) * 0.5, (o[1] + o[3]) * 0.5, o[4])
 				_quad_out(p3(c[0], c[1], c[4] + curb), p3(c[2], c[3], c[4] + curb), p3(c[2], c[3], c[4] - 1.2), p3(c[0], c[1], c[4] - 1.2), inside, face, face_idx)
+				var w := Vector2(c[2] - c[0], c[3] - c[1]).length()
+				face_uv.append_array([Vector2(0, 0), Vector2(w, 0), Vector2(w, curb + 1.2), Vector2(0, curb + 1.2)])
 	_fix_winding(top, top_idx)
-	_mesh_node(_mesh(top, top_idx), COL_WALK, "Kaldirimlar")
-	_mesh_node(_mesh(face, face_idx), COL_CURB, "Bordurler")
+	var walk := MeshInstance3D.new()
+	walk.name = "Kaldirimlar"
+	walk.mesh = _mesh(top, top_idx, top_col, top_uv)
+	var wm := ShaderMaterial.new()
+	wm.shader = KALDIRIM_SHADER
+	walk.material_override = wm
+	add_child(walk)
+	var curbs := MeshInstance3D.new()
+	curbs.name = "Bordurler"
+	curbs.mesh = _mesh(face, face_idx, PackedColorArray(), face_uv)
+	var cm := ShaderMaterial.new()
+	cm.shader = BORDUR_SHADER
+	curbs.material_override = cm
+	add_child(curbs)
 	var all := _faces(top, top_idx)
 	all.append_array(_faces(face, face_idx))
 	_body("KaldirimCarpisma", "beton", all)

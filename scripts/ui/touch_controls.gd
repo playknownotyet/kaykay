@@ -26,7 +26,11 @@ const FLICK_FROM := 0.35
 const FLICK_TO := 0.85
 
 enum Zone { LEFT, RIGHT, BUTTON }
-const ROUND := ["zipla", "bin"]
+const ROUND := ["zipla", "bin", "koy"]
+
+
+func _is_round(name: String) -> bool:
+	return name in ROUND or name.begins_with("ctx:")
 
 var _touches := {}               # index -> Dictionary
 var _gesture_owner := -1          # sol: ayak hareketi (kaykay) ya da yürüme joystick'i (yaya)
@@ -50,6 +54,17 @@ func _process(_delta: float) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_F:
+		if player and not player.context_buttons.is_empty():
+			player.press_context(player.context_buttons[0].id)
+		return
+	if event is InputEventKey and event.pressed and not event.echo and player:
+		if event.physical_keycode == KEY_G:
+			player.stow_held()
+			return
+		if event.physical_keycode == KEY_B:
+			player.toggle_bag()
+			return
 	if event is InputEventScreenTouch:
 		if event.pressed:
 			_on_press(event.index, event.position)
@@ -70,6 +85,17 @@ func _buttons() -> Dictionary:
 	if player == null:
 		return out
 	var busy := player.board_anim != SkateController.BoardAnim.NONE or player.fall_time > 0.0
+	# Bağlam butonları (soygun, al, hazır...): sağda, zıplamanın üstünde dizilir
+	if not player.context_buttons.is_empty():
+		var cd := h * 0.15
+		var r0 := _joy_radius()
+		var base := Vector2(size.x - m - cd * 0.5, size.y * 0.5 - r0 * 1.6 if player.on_foot else size.y * 0.42)
+		for i in player.context_buttons.size():
+			var cb: Dictionary = player.context_buttons[i]
+			var c := base - Vector2((cd + h * 0.03) * i, 0)
+			out["ctx:" + String(cb.id)] = [Rect2(c - Vector2(cd, cd) * 0.5, Vector2(cd, cd)), cb.icon]
+	if player.input_locked or player.held_in_air:
+		return out
 	if player.on_foot:
 		# Kamera joystick'i sağ altta; zıplama onun üstünde, kaykaya binme zıplamanın sağında (yuvarlak)
 		var r := _joy_radius()
@@ -79,7 +105,12 @@ func _buttons() -> Dictionary:
 		out["zipla"] = [Rect2(jc - Vector2(jd, jd) * 0.5, Vector2(jd, jd)), "zipla"]
 		var bd := h * 0.13
 		var bc := Vector2(minf(jc.x + jd * 0.5 + h * 0.03 + bd * 0.5, size.x - m - bd * 0.5), jc.y + (jd - bd) * 0.5)
-		out["bin"] = [Rect2(bc - Vector2(bd, bd) * 0.5, Vector2(bd, bd)), "bin"]
+		if player.held_item != "":
+			# Elde eşya varken binme yerine "çantaya at"
+			if player.action_time <= 0.0 and not player.bag_open:
+				out["koy"] = [Rect2(bc - Vector2(bd, bd) * 0.5, Vector2(bd, bd)), "koy"]
+		elif not player.bag_open:
+			out["bin"] = [Rect2(bc - Vector2(bd, bd) * 0.5, Vector2(bd, bd)), "bin"]
 	else:
 		var b := h * 0.12
 		if not busy:
@@ -92,6 +123,9 @@ func _buttons() -> Dictionary:
 
 
 func _press_button(name: String) -> void:
+	if name.begins_with("ctx:"):
+		player.press_context(name.substr(4))
+		return
 	match name:
 		"zipla":
 			SkateInput.request_ollie()
@@ -99,6 +133,8 @@ func _press_button(name: String) -> void:
 			SkateInput.request_board_toggle()
 		"tutun":
 			SkateInput.request_skitch()
+		"koy":
+			player.stow_held()
 
 
 # ---------- Dokunuş olayları ----------
@@ -109,7 +145,7 @@ func _on_press(index: int, pos: Vector2) -> void:
 	var btns := _buttons()
 	for name in btns:
 		var r: Rect2 = btns[name][0]
-		var hit := pos.distance_to(r.get_center()) < r.size.x * 0.5 + get_viewport_rect().size.y * 0.015 if name in ROUND 			else r.grow(get_viewport_rect().size.y * 0.012).has_point(pos)
+		var hit := pos.distance_to(r.get_center()) < r.size.x * 0.5 + get_viewport_rect().size.y * 0.015 if _is_round(name) 			else r.grow(get_viewport_rect().size.y * 0.012).has_point(pos)
 		if hit:
 			_pressed[name] = index
 			_touches[index] = {"zone": Zone.BUTTON, "start": pos, "pos": pos, "time": _now(), "last_time": _now()}
@@ -294,6 +330,11 @@ func _is_blocked(pos: Vector2) -> bool:
 
 func _draw() -> void:
 	var r := _joy_radius()
+	if player and player.input_locked:
+		var bl := _buttons()
+		for name in bl:
+			PixelArt.draw_round_button(self, bl[name][0], bl[name][1], _pressed.has(name))
+		return
 	if SkateInput.on_foot:
 		var mb := _move_base if _gesture_owner != -1 else _move_rest()
 		_draw_stick(mb, _move_knob, _gesture_owner != -1, r)
@@ -322,7 +363,7 @@ func _draw() -> void:
 			_draw_stick(base, _joy_knob, _joy_owner != -1, r)
 	var btns := _buttons()
 	for name in btns:
-		if name in ROUND:
+		if _is_round(name):
 			PixelArt.draw_round_button(self, btns[name][0], btns[name][1], _pressed.has(name))
 		else:
 			PixelArt.draw_button(self, btns[name][0], btns[name][1], _pressed.has(name))

@@ -16,6 +16,7 @@ var look: Node
 var touch_controls: Control
 var _look_button: PixelButton
 var _look_menu: Control
+var _bag_ui: Control
 
 var _panel: PanelContainer
 var _settings_button: PixelButton
@@ -37,7 +38,7 @@ func setup(p_player: SkateController, p_camera: Node, p_visual: Node, p_fx: Node
 	_capture_defaults()
 	_load()
 	_sync_widgets()
-	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _look_menu])
+	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _look_menu, _bag_ui.button])
 	touch_controls.player = player
 	look.changed.connect(func(_n: String): _sync_widgets())
 
@@ -157,6 +158,10 @@ func _build() -> void:
 	var tricks := preload("res://scripts/ui/numara_yazisi.gd").new()
 	tricks.player = player
 	add_child(tricks)
+	# Sırt çantası (envanter)
+	_bag_ui = preload("res://scripts/ui/envanter_ui.gd").new()
+	_bag_ui.player = player
+	add_child(_bag_ui)
 
 	# Sol üst: ikon butonlar (ayarlar, başa dön, görünüm)
 	var b := vh * 0.1

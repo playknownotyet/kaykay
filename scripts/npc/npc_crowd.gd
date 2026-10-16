@@ -173,15 +173,23 @@ func _new_destination(n: Npc) -> void:
 	n.idle_for(_rng.randf_range(1.0, 3.0))
 
 
-func _spawn_point() -> Vector3:
-	if player and _points.size() > 600:
-		return _points[_point_near(player.global_position, spawn_min, spawn_max)]
-	var p := _points[_random_point()]
-	for attempt in 8:
-		if player == null or p.distance_to(player.global_position) > 8.0:
-			break
-		p = _points[_random_point()]
-	return p
+## Doğma noktası: oyuncudan en az spawn_min uzakta ve yakınsa (90 m) kameranın görmediği bir yer.
+## Uygun yer yoksa Vector3.INF (NPC görünmez bekler, sonra yeniden dener). Eskiden bulunamayınca
+## oyuncuya en yakın noktaya düşüyordu: sürerken önüne birden NPC çıkıyordu.
+func _spawn_point(allow_view := false) -> Vector3:
+	if player == null:
+		return _points[_random_point()]
+	var pp := player.global_position
+	var big := _points.size() > 600
+	for attempt in 80:
+		var p := _points[_random_point()]
+		var d := Vector2(p.x - pp.x, p.z - pp.z).length()
+		if d < spawn_min or (big and d > spawn_max):
+			continue
+		if not allow_view and camera and d < 90.0 and camera.is_position_in_frustum(p + Vector3.UP):
+			continue
+		return p
+	return Vector3.INF
 
 
 func _spawn() -> void:
@@ -191,7 +199,12 @@ func _spawn() -> void:
 		n.ground_exclude = [player.get_rid()]
 	add_child(n)
 	n.setup(recipe, _materials)
-	n.global_position = _spawn_point()
+	var sp := _spawn_point()
+	if sp == Vector3.INF:
+		sp = _spawn_point(true)
+	if sp == Vector3.INF:
+		sp = player.global_position + Vector3(0, -300, 0) if player else _points[_random_point()]
+	n.global_position = sp
 	_npcs.append(n)
 	if _rng.randf() < 0.3:
 		n.idle_for(_rng.randf_range(0.5, 4.0))
@@ -266,7 +279,9 @@ func _physics_process(delta: float) -> void:
 		n.set_far(n.global_position.distance_to(cam_pos) > visible_distance)
 		# Çok uzakta kalan NPC oyuncunun çevresine geri gelir (görünmezken)
 		if player and _points.size() > 600 and n.far and n.global_position.distance_to(ppos) > recycle_distance:
-			n.global_position = _spawn_point()
+			var sp := _spawn_point()
+			if sp != Vector3.INF:
+				n.global_position = sp
 			_new_destination(n)
 
 

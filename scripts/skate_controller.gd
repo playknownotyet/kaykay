@@ -18,6 +18,13 @@ signal grind_ended
 signal mode_changed(on_foot: bool)
 signal knocked_down                 # araba çarptı: düşer, kalkar, kendiliğinden kaykaya biner
 signal skitch_changed(on: bool)     # arabanın arkasına tutundu / bıraktı
+signal action_started(name: String) # tek seferlik eylem (çantaya atma vb.)
+signal context_action(id: String)   # bağlam butonu (soygun başlat, al ...) basıldı
+signal auto_hopped                  # kaldırım önünde kendiliğinden küçük zıplama
+signal inventory_changed
+signal bag_changed(open: bool)
+signal stow_started(item: String)   # elindeki eşyayı çantaya atmaya başladı
+signal item_stowed(item: String)    # eşya çantada
 
 # --- Ayar panelinden değiştirilebilen değerler ---
 @export var gravity := 14.5
@@ -56,6 +63,14 @@ signal skitch_changed(on: bool)     # arabanın arkasına tutundu / bıraktı
 @export var floor_snap := 0.35
 ## Yerdeyken zemine bastırma hızı (m/sn); ileri hıza etkisi yok.
 @export var ground_stick := 1.0
+
+# --- Kesintisiz sürüş ---
+## Kaldırım gibi alçak basamakların önünde kendiliğinden küçük zıplama (hız kaybı yok)
+@export var auto_hop := true
+## Bu yüksekliğe (m) kadar basamaklar otomatik aşılır (zıplayarak ya da adım atarak)
+@export var step_max := 0.32
+## Zıplamanın basamağın ne kadar üstünden geçeceği (m)
+@export var auto_hop_clear := 0.1
 
 # --- Yaya ---
 @export var walk_speed := 1.8
@@ -116,6 +131,27 @@ var fall_on_foot := false
 ## Tutunma: trafik yöneticisi yakındaki uygun arabayı yazar; tutununca skitch_car olur
 var skitch_candidate: Araba = null
 var skitch_car: Araba = null
+## Tek seferlik eylem (animasyon adı) ve kalan süresi: bu sürede hareket yok
+var action_name := ""
+var action_time := 0.0
+## Girdiler kilitli (soygunda kuş bakışı keşif): yürüme / zıplama / binme yok
+var input_locked := false
+## Ekranda gösterilecek bağlam butonları: [{id, icon}] (dükkan vb. her kare yazar)
+var context_buttons: Array = []
+
+# --- Envanter: sırt çantası (4 göz) ve elde tutulan eşya ---
+var inventory: Array = ["", "", "", ""]
+var held_item := ""
+## Elde tutulan eşyanın düğümü (görsel her kare sol ele oturtur)
+var held_node: Node3D = null
+var bag_open := false
+## Sinematik: biri tutup taşıyor (konumu dışarıdan verilir, fizik yok)
+var held_in_air := false
+## karakter_rig.py: canta_ac / canta_kapat 24 kare, cantaya_koy 24 kare (14. karede çantada)
+const BAG_ANIM_TIME := 24.0 / 30.0
+const STOW_TIME := 24.0 / 30.0
+const STOW_DROP := 14.0 / 30.0
+var _stow_t := -1.0
 
 var _coyote := 0.0
 var _ollie_buffer := 0.0
@@ -185,10 +221,38 @@ func _physics_process(delta: float) -> void:
 		if t > STUMBLE_FOOT_DOWN.x and t < STUMBLE_FOOT_DOWN.y and grounded:
 			speed = move_toward(speed, 0.0, stumble_brake * delta)
 
-	if fall_time > 0.0:
+	if _stow_t >= 0.0:
+		_stow_t += delta
+		if _stow_t >= STOW_DROP:
+			_stow_t = -1.0
+			var slot := inventory.find("")
+			var it := held_item
+			if slot >= 0 and it != "":
+				inventory[slot] = it
+			held_item = ""
+			held_node = null
+			inventory_changed.emit()
+			item_stowed.emit(it)
+	if held_in_air:
+		velocity = Vector3.ZERO
+		speed = 0.0
 		inp.consume_board_toggle()
 		inp.consume_skitch()
 		_ollie_buffer = 0.0
+		return
+	if fall_time > 0.0 or action_time > 0.0 or input_locked or (bag_open and on_foot):
+		inp.consume_board_toggle()
+		inp.consume_skitch()
+		_ollie_buffer = 0.0
+		if action_time > 0.0:
+			action_time = maxf(action_time - delta, 0.0)
+			if action_time == 0.0:
+				action_name = ""
+			velocity.x = 0.0
+			velocity.z = 0.0
+		if input_locked and fall_time <= 0.0 and action_time <= 0.0:
+			velocity.x = move_toward(velocity.x, 0.0, 12.0 * delta)
+			velocity.z = move_toward(velocity.z, 0.0, 12.0 * delta)
 		_fall_move(delta)
 		return
 
@@ -224,6 +288,7 @@ func _physics_process(delta: float) -> void:
 		_air_move(delta)
 
 	_handle_jump_input(delta)
+	_auto_hop_check()
 
 	floor_snap_length = 0.0 if _ollie_lock > 0.0 else floor_snap
 	var pre_velocity := velocity
@@ -397,6 +462,11 @@ func _handle_walls() -> void:
 	var worst := Vector3.ZERO
 	var worst_into := 0.0
 	var wall_dot := cos(floor_max_angle)
+	# Alçak basamağa (kaldırım, kavşak kenarı) değdiyse takılma: üstüne çık, hız kaybetme
+	if absf(speed) > 0.1 and is_on_wall():
+		var mv := Vector3(heading.x, 0.0, heading.z).normalized() * signf(speed)
+		if _step_up(mv):
+			return
 	for i in get_slide_collision_count():
 		var col := get_slide_collision(i)
 		var n := col.get_normal()
@@ -436,7 +506,7 @@ func _handle_walls() -> void:
 ## Kaykaydan in / kaykaya bin. Animasyonlu: binerken koşup kaykayı öne atar ve
 ## üstüne zıplar; inerken kaykaydan atlayıp onu altından çekip eline alır.
 func toggle_board() -> void:
-	if board_anim != BoardAnim.NONE:
+	if board_anim != BoardAnim.NONE or held_item != "" or bag_open:
 		return
 	if on_foot:
 		board_anim = BoardAnim.MOUNTING
@@ -520,7 +590,10 @@ func _foot_move(delta: float) -> void:
 	if velocity.y <= 0.0:
 		floor_snap_length = floor_snap
 	var was := grounded
+	var want_dir := Vector3(velocity.x, 0.0, velocity.z)
 	move_and_slide()
+	if is_on_wall() and want_dir.length() > 0.3:
+		_step_up(want_dir.normalized())
 	grounded = is_on_floor()
 	if was and not grounded and velocity.y <= 0.0:
 		_coyote = COYOTE_TIME     # kenardan düştü: kısa süre yine zıplanabilir
@@ -682,6 +755,139 @@ func shake() -> void:
 		return
 	stumble_time = STUMBLE_TIME
 	stumbled.emit()
+
+
+# ---------- Kesintisiz sürüş: kendiliğinden zıplama ve basamak çıkma ----------
+
+## İleride (dir yönünde, reach mesafe içinde) aşılabilir alçak bir basamak var mı?
+## Varsa ayak seviyesine göre yüksekliği, yoksa -1. Üstünde gövdeyi kesecek engel olmamalı.
+func _ledge_ahead(dir: Vector3, reach: float) -> float:
+	if dir.length_squared() < 0.01:
+		return -1.0
+	var space := get_world_3d().direct_space_state
+	var p := global_position
+	var excl: Array[RID] = [get_rid()]
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(p + Vector3.UP * 0.06, p + Vector3.UP * 0.06 + dir * reach, collision_mask, excl))
+	if hit.is_empty():
+		return -1.0
+	var n: Vector3 = hit.normal
+	if n.y > 0.6:
+		return -1.0                   # rampa / eğim: zaten çıkılır
+	var nh := Vector3(n.x, 0.0, n.z).normalized()
+	if -nh.dot(dir) < 0.3:
+		return -1.0                   # çok yandan sıyırıyor: duvar gibi kayar
+	var probe: Vector3 = hit.position + dir * 0.22
+	var top := space.intersect_ray(PhysicsRayQueryParameters3D.create(probe + Vector3.UP * (step_max + 0.4), Vector3(probe.x, p.y - 0.05, probe.z), collision_mask, excl))
+	if top.is_empty() or top.normal.y < 0.8:
+		return -1.0
+	var h: float = top.position.y - p.y
+	if h <= 0.02 or h > step_max:
+		return -1.0
+	# Basamağın üstü açık mı (bank, araba, duvar değil)
+	var above := p + Vector3.UP * (h + 0.35)
+	if not space.intersect_ray(PhysicsRayQueryParameters3D.create(above, above + dir * (reach + 0.5), collision_mask, excl)).is_empty():
+		return -1.0
+	return h
+
+
+## Sürerken kaldırım yaklaşınca tam zamanında küçük bir zıplama
+func _auto_hop_check() -> void:
+	if not auto_hop or not grounded or _windup >= 0.0 or _ollie_lock > 0.0 or absf(speed) < 1.6:
+		return
+	var dir := Vector3(heading.x, 0.0, heading.z).normalized() * signf(speed)
+	# Basamağa varmadan yükselmiş olacak kadar önceden (yüksek hızda daha erken)
+	var reach := absf(speed) * 0.11 + 0.3
+	var h := _ledge_ahead(dir, reach)
+	if h < 0.0:
+		return
+	_jump_base_y = global_position.y
+	velocity += ground_normal * ground_stick
+	velocity.y = sqrt(2.0 * gravity * (h + auto_hop_clear))
+	grounded = false
+	_coyote = 0.0
+	_ollie_lock = 0.12
+	air_time = 0.0
+	auto_hopped.emit()
+
+
+## Değilen alçak basamağın üstüne çık (yavaşken, açılı girerken, yayayken)
+func _step_up(dir: Vector3) -> bool:
+	var h := _ledge_ahead(dir, 0.55)
+	if h < 0.0:
+		return false
+	global_position += Vector3.UP * (h + 0.015) + dir * 0.06
+	velocity.y = maxf(velocity.y, 0.0)
+	return true
+
+
+# ---------- Envanter ----------
+
+## Çanta butonu: yayayken çantayı sırtından alıp açar / kapatıp sırtına takar
+func toggle_bag() -> void:
+	if fall_time > 0.0 or held_in_air:
+		return
+	# Açılırken tekrar basılırsa da kapanır (açma yarıda kesilir)
+	if action_time > 0.0 and not (bag_open and action_name == "canta_ac"):
+		return
+	if bag_open:
+		bag_open = false
+		if on_foot:
+			action_time = 0.0
+			play_action("canta_kapat", BAG_ANIM_TIME)
+		bag_changed.emit(false)
+		return
+	if on_foot:
+		if held_item != "":
+			return                       # eli dolu: önce çantaya at
+		play_action("canta_ac", BAG_ANIM_TIME)
+	bag_open = true
+	bag_changed.emit(true)
+
+
+## Elindeki eşyayı çantaya at (yer varsa); 14. karede çantada olur
+func stow_held() -> bool:
+	if held_item == "" or not on_foot or action_time > 0.0 or bag_open or inventory.find("") < 0:
+		return false
+	play_action("cantaya_koy", STOW_TIME)
+	_stow_t = 0.0
+	stow_started.emit(held_item)
+	return true
+
+
+## Eşyayı eline al (görsel: düğüm sol ele oturur)
+func hold_item(item: String, node: Node3D) -> void:
+	held_item = item
+	held_node = node
+	inventory_changed.emit()
+
+
+## Eldeki ve çantadaki belirli eşyaları geri ver (yakalanınca)
+func take_back(items: Array) -> void:
+	if held_item in items:
+		held_item = ""
+		held_node = null
+	for i in inventory.size():
+		if inventory[i] in items:
+			inventory[i] = ""
+	inventory_changed.emit()
+
+
+# ---------- Bağlam eylemleri ----------
+
+## Tek seferlik eylem animasyonu (yayayken): süre boyunca yerinde durur
+func play_action(n: String, duration: float) -> void:
+	if not on_foot or fall_time > 0.0 or action_time > 0.0:
+		return
+	action_name = n
+	action_time = duration
+	speed = 0.0
+	velocity = Vector3(0.0, velocity.y, 0.0)
+	action_started.emit(n)
+
+
+## Bağlam butonu basıldı (dokunmatik ya da F tuşu)
+func press_context(id: String) -> void:
+	context_action.emit(id)
 
 
 # ---------- Araba: düşme ve tutunma ----------
