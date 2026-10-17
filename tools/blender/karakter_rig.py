@@ -28,10 +28,13 @@ PREVIEW_DIR = args[1] if len(args) > 1 else None
 
 DECK_TOP = 0.09
 FPS = 30
-MOUNT_FRAMES = 15        # 0.5 sn: Godot'taki MOUNT_TIME ile aynı
-MOUNT_SPEED = 3.0        # binerken koşu hızı (m/sn): Godot ile aynı olmalı
+MOUNT_FRAMES = 24        # 0.8 sn: Godot'taki MOUNT_TIME ile aynı
+MOUNT_SPEED = 2.2        # binerken yürüyüş hızı (m/sn): Godot ile aynı olmalı
 DISMOUNT_FRAMES = 15
 OLLIE_POP_FRAME = 3      # 0.1 sn hazırlık: Godot'taki ollie_windup ile aynı
+PUSH_RET_FRAMES = 10     # itmeden dönüş: Godot player_visual.gd ile aynı süre
+YAYA_ZIPLA_FRAMES = 12   # Godot player_visual.gd ile aynı
+YAYA_INIS_FRAMES = 10
 TUCK = 0.08              # havada dizler toplu: ayaklar ve kaykay köke göre bu kadar yukarıda
 
 # ---------------------------------------------------------------------------
@@ -326,7 +329,13 @@ def apply_pose(arm_obj, pose):
         if f"foot.{sfx}" in pose:
             set_target(arm_obj, f"ik_foot.{sfx}", pose[f"foot.{sfx}"])
         if f"foot_rot.{sfx}" in pose:
-            pb[f"ik_foot.{sfx}"].rotation_euler = [math.radians(a) for a in pose[f"foot_rot.{sfx}"]]
+            # (parmak eğimi, -, yön): yön dünyanın dik ekseni etrafında; böylece taban yerde
+            # düz kalır (kemiğin eğik ekseni etrafında dönünce ayak yan yatıyordu).
+            # Eğim: eksi = topuk kalkık / parmak ucuna basış (eski anlamıyla aynı).
+            pitch, _roll, yaw = pose[f"foot_rot.{sfx}"]
+            rest = arm_obj.data.bones[f"ik_foot.{sfx}"].matrix_local.to_3x3()
+            m = Matrix.Rotation(math.radians(yaw), 3, 'Z') @ Matrix.Rotation(math.radians(-pitch), 3, 'X')
+            pb[f"ik_foot.{sfx}"].rotation_euler = (rest.inverted() @ m @ rest).to_euler('XYZ')
         if f"hand.{sfx}" in pose:
             set_target(arm_obj, f"ik_hand.{sfx}", pose[f"hand.{sfx}"])
         if f"knee.{sfx}" in pose:
@@ -369,6 +378,20 @@ def lerp(a, b, t):
     return tuple(x + (y - x) * t for x, y in zip(a, b))
 
 
+def blend_pose(a, b, t):
+    """İki poz sözlüğünü karıştırır (hedefler ve açılar doğrusal)."""
+    out = dict(a)
+    for k, v in b.items():
+        if k in a:
+            if isinstance(v, tuple):
+                out[k] = lerp(a[k], v, t)
+            elif isinstance(v, (int, float)):
+                out[k] = a[k] + (v - a[k]) * t
+        else:
+            out[k] = v
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Kaykayı elde taşıma noktası
 # ---------------------------------------------------------------------------
@@ -382,13 +405,44 @@ RAISED_ELBOWS = {"elbow.L": (0.32, 0.3, 0.2), "elbow.R": (-0.32, 0.3, 0.2)}
 HAND_RELAX = {"hand_rot.L": (-12, 0, 8), "hand_rot.R": (-12, 0, -8)}
 
 
+UPPER_LEN, FORE_LEN = 0.25, 0.22     # omuz -> dirsek -> bilek (arm() ile aynı)
+
+
+def swing_arm(p, sfx, swing, bend, out=0.05, hips=(0.0, 0.0, 0.0), lean=0.0, yaw=0.0):
+    """Kolu omuzdan sarkaç gibi yerleştirir: swing = üst kolun öne açısı (derece, eksi = geride),
+    bend = dirseğin ayrıca öne bükülmesi (hep >= 0: kol ters bükülmez). Dirsek hedefi dirseğin
+    arkasında: IK dirseği hep geriye, önkolu öne büker. lean / yaw: gövdenin öne eğimi ve
+    dönüşü (omuzların yeri buna göre kayar)."""
+    side = 1.0 if sfx == "L" else -1.0
+    y = math.radians(yaw)
+    fwd = Vector((math.sin(y), -math.cos(y), 0.0))
+    outv = Vector((math.cos(y), math.sin(y), 0.0)) * side
+    up = Vector((0.0, 0.0, 1.0))
+    ln = math.radians(lean)
+    sh = Vector((hips[0], hips[1], 0.70 + hips[2])) + outv * 0.165 + fwd * (0.375 * math.sin(ln)) \
+        + up * (0.375 * math.cos(ln))
+    a = math.radians(swing)
+    b = math.radians(swing + max(bend, 0.0))
+    elbow = sh + fwd * (UPPER_LEN * math.sin(a)) - up * (UPPER_LEN * math.cos(a)) + outv * out
+    wrist = elbow + fwd * (FORE_LEN * math.sin(b)) - up * (FORE_LEN * math.cos(b)) + outv * (out * 0.4)
+    p[f"hand.{sfx}"] = tuple(wrist)
+    p[f"elbow.{sfx}"] = tuple(elbow - fwd * 0.35 + outv * 0.06)
+    return p
+
+
+STAND_ARMS = {}
+swing_arm(STAND_ARMS, "L", 0.0, 10.0, out=0.06)
+swing_arm(STAND_ARMS, "R", 4.0, 14.0, out=0.08)       # kaykayı tutan kol
+STAND_HAND_L = STAND_ARMS["hand.L"]
+STAND_HAND_R = STAND_ARMS["hand.R"]
+
+
 def stand_pose(**over):
     p = {"hips": (0, 0, -0.012)}
     for sfx, side in (("L", 1), ("R", -1)):
         p[f"foot.{sfx}"] = (0.11 * side, 0.01, 0.075)
-        p[f"hand.{sfx}"] = (0.25 * side, 0.02, 0.63)
-    p["hand.R"] = (-0.27, 0.03, 0.66)   # kaykayı tutan el biraz yukarıda
     p.update(LIMB_POLES)
+    p.update(STAND_ARMS)
     p.update(HAND_RELAX)
     p["carry"] = 1.0
     p.update(over)
@@ -462,10 +516,12 @@ def add_carry_bone(arm_obj):
     hand_pose = arm_obj.pose.bones["hand.R"].matrix.copy()
     hand_rest = arm_obj.data.bones["hand.R"].matrix_local.copy()
     board_rest = arm_obj.data.bones["board"].matrix_local.copy()
-    # Kaykay modeli: boyu +Y... ucu -Y, üst yüz +Z. Elde: boyu dikey (+Z),
-    # üst yüz (+Z) vücuda doğru (+X, sağ taraftan bakınca içeri), genişlik +Y.
-    # Satırlar; sütunlar: model X -> +Y, Y -> +Z, Z (üst yüz) -> +X, konum son sütun
-    rot = Matrix(((0, 0, 1, -0.43), (1, 0, 0, 0.03), (0, 1, 0, 0.56), (0, 0, 0, 1)))
+    # Kaykay modeli: boyu Y (ucu -Y), üst yüz +Z, genişlik X. Elde (bavul gibi): boyu yere
+    # paralel ve gidiş yönünde (ucu önde), üst yüz (grip) vücuda dönük (+X), tekerlekler
+    # dışarıda; el tahtanın üst kenarını ortasından kavrar. Sütunlar: model X -> -Z,
+    # Y -> +Y, Z (üst yüz) -> +X, konum son sütun.
+    wx, wy, wz = STAND_HAND_R
+    rot = Matrix(((0, 0, 1, wx - 0.117), (0, 1, 0, wy), (-1, 0, 0, wz - 0.18), (0, 0, 0, 1)))
     desired_bone = rot @ board_rest
     helper_rest = hand_rest @ hand_pose.inverted() @ desired_bone
 
@@ -510,6 +566,88 @@ def ride_base(crouch=0.04, **over):
     p.update(LIMB_POLES)
     p.update(HAND_RELAX)
     p.update(over)
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Yan duruş (kayarken / süzülürken): sağ ayak önde, gövde sola (+X) döner, sağ omuz
+# gidiş yönüne bakar, baş gidişe döner. İtmede ve hızlanmada gövde öne döner.
+# Referans: kaykay referans.mov (gerçek kaykaycılardan pozlar)
+# ---------------------------------------------------------------------------
+SIDE_YAW = 72.0
+SIDE_FRONT = (0.0, -0.17, 55.0)      # ön ayak: ortası (x, y), parmak yönü (0 = burun, 90 = sol)
+SIDE_BACK = (0.0, 0.2, 86.0)         # arka ayak: kuyruk vidalarının üstü
+
+
+def body_axes(yaw):
+    a = math.radians(yaw)
+    fwd = Vector((math.sin(a), -math.cos(a), 0.0))      # gövdenin baktığı yön
+    right = Vector((-math.cos(a), -math.sin(a), 0.0))   # gövdenin sağı (öndeki omuz)
+    return fwd, right
+
+
+def bp(yaw, right, fwd, z, base=(0.0, 0.02)):
+    """Gövde ekseninde (sağ, ön, yükseklik) verilen noktayı dünya koordinatına çevirir."""
+    f, r = body_axes(yaw)
+    v = r * right + f * fwd
+    return (base[0] + v.x, base[1] + v.y, z)
+
+
+def foot_on(center, yaw_deg, dz=0.0, z0=None):
+    """Ayak hedefi: ayağın ortası center (x, y) olsun, parmak ucu yaw_deg yönüne baksın."""
+    a = math.radians(yaw_deg)
+    toe = Vector((math.sin(a), -math.cos(a), 0.0))
+    ank = Vector((center[0], center[1], 0.0)) - toe * 0.07
+    z = (D + 0.075 if z0 is None else z0) + dz
+    return (ank.x, ank.y, z), (0.0, 0.0, yaw_deg)
+
+
+def knee_pole(foot, yaw, along=0.0, out=0.6, z=0.5):
+    f, _ = body_axes(yaw)
+    return (foot[0] + f.x * out, foot[1] + f.y * out + along, z)
+
+
+def side_base(crouch=0.06, yaw=SIDE_YAW, front=SIDE_FRONT, back=SIDE_BACK, dz=0.0, **over):
+    """Yan duruş: dizler gövdenin baktığı yöne bükülür, kollar gevşek yanlarda,
+    baş gidiş yönüne (-Y) döner. dz: ayaklar ve kaykay köke göre yukarıda (havada)."""
+    twist = -12.0                                       # omuzlar biraz gidişe açılır
+    p = {
+        "hips": (0.0, 0.015, D - crouch + dz),
+        "hips_rot": (0, yaw, 0),
+        "spine_rot": (8, twist * 0.5, 0),
+        "chest_rot": (2, twist * 0.5, 0),
+        "neck_rot": (0, -24, 0),
+        "head_rot": (-4, -30, 0),
+        "carry": 0.0,
+    }
+    fr, frr = foot_on(front[:2], front[2], dz)
+    bk, bkr = foot_on(back[:2], back[2], dz)
+    p["foot.R"], p["foot_rot.R"] = fr, frr
+    p["foot.L"], p["foot_rot.L"] = bk, bkr
+    p["knee.R"] = knee_pole(fr, yaw, along=-0.12, z=0.5 + dz)
+    p["knee.L"] = knee_pole(bk, yaw, along=0.08, z=0.5 + dz)
+    sy = yaw + twist
+    hz = 0.7 + D - crouch + dz
+    p["hand.R"] = bp(sy, 0.215, 0.02, hz)
+    p["hand.L"] = bp(sy, -0.215, 0.02, hz)
+    p["elbow.R"] = bp(sy, 0.27, -0.5, 0.75 + dz)
+    p["elbow.L"] = bp(sy, -0.27, -0.5, 0.75 + dz)
+    p.update(HAND_RELAX)
+    if "board" not in over and dz:
+        p["board"] = (0, 0, dz)
+    p.update(over)
+    return p
+
+
+def arms(p, yaw, crouch, dz=0.0, **pts):
+    """Kolları gövde ekseninde yerleştirir: hand_R=(sağ, ön, yükseklik farkı), elbow_R=..."""
+    hz = 0.7 + D - crouch + dz
+    for key, (r, f, z) in pts.items():
+        part, sfx = key.split("_")
+        if part == "hand":
+            p[f"hand.{sfx}"] = bp(yaw, r, f, hz + z)
+        else:
+            p[f"elbow.{sfx}"] = bp(yaw, r, f, hz + z)
     return p
 
 
@@ -568,56 +706,125 @@ def make_actions(arm_obj):
         new_action(arm_obj, name)
         acts.append(name)
 
-    # --- Kaykayda bekleme (yavaş): gevşek kollar, nefes ---
+    # --- Kaykayda bekleme (yavaş, yan duruş): gevşek kollar, nefes ---
     act("ride_idle")
     for f, k in ((0, 0.0), (24, 1.0), (48, 0.0)):
-        key_pose(arm_obj, f, ride_base(crouch=0.04 + 0.012 * k, chest_rot=(-2 * k, 0, 0),
-                                       **{"hand.L": (0.215, -0.02 + 0.01 * k, 0.7 + D - 0.04),
-                                          "hand.R": (-0.215, -0.02 - 0.01 * k, 0.7 + D - 0.04)}))
+        p = side_base(crouch=0.05 + 0.012 * k, chest_rot=(2 - 2 * k, -6, 0))
+        arms(p, SIDE_YAW - 12, 0.05 + 0.012 * k, hand_R=(0.215, 0.03 + 0.01 * k, 0.0), hand_L=(-0.215, 0.02 - 0.01 * k, 0.0))
+        key_pose(arm_obj, f, p)
 
-    # --- Hızlı sürüş: daha çömelik, kollar dengeye hafif açık ve geride ---
+    # --- Hızlı süzülme (yan duruş): daha alçak, kollar dengeye hafif açık ---
     act("ride_fast")
     for f, k in ((0, 0.0), (20, 1.0), (40, 0.0)):
-        c = 0.1 + 0.01 * k
-        key_pose(arm_obj, f, ride_base(
-            crouch=c, spine_rot=(16, 0, 0), head_rot=(-10, 0, 0),
-            **{"hand.L": (0.24, 0.06 + 0.01 * k, 0.71 + D - c),
-               "hand.R": (-0.24, 0.04 - 0.01 * k, 0.72 + D - c),
-               "hand_rot.L": (-25, 0, 20), "hand_rot.R": (-25, 0, -20)}))
+        c = 0.11 + 0.01 * k
+        p = side_base(crouch=c, spine_rot=(14, -6, 0), head_rot=(-10, -30, 0))
+        arms(p, SIDE_YAW - 12, c, hand_R=(0.3, 0.1, 0.05 + 0.01 * k), hand_L=(-0.3, 0.08, 0.03 - 0.01 * k))
+        p["hand_rot.L"] = (-25, 0, 20)
+        p["hand_rot.R"] = (-25, 0, -20)
+        key_pose(arm_obj, f, p)
 
-    # --- Dönüşler (hızlıyken): gövde dönüşe bükülür, kollar karşı denge kurar ---
+    # --- Dönüşler: sola dönüş = parmak tarafı (gövdenin baktığı yön): dizler öne,
+    #     gövde öne eğik, ön kol öne uzanır. Sağa dönüş = topuk tarafı: kalça geriye
+    #     oturur, gövde dik, kollar öne denge kurar. ---
     for name, s in (("ride_turn_l", 1), ("ride_turn_r", -1)):
         act(name)
         for f in (0, 20):
-            c = 0.09
-            inner, outer = ("L", "R") if s > 0 else ("R", "L")
-            pose = ride_base(
-                crouch=c, hips=(0.02 * s, 0.02, D - c),
-                spine_rot=(12, 12 * s, 5 * s), chest_rot=(0, 6 * s, 0), head_rot=(-6, 14 * s, 0))
-            pose[f"hand.{inner}"] = (0.23 * s, 0.1, 0.64 + D - c)
-            pose[f"hand.{outer}"] = (-0.31 * s, -0.06, 0.74 + D - c)
-            pose[f"hand_rot.{outer}"] = (-15, 0, -15 * s)
-            pose[f"elbow.{outer}"] = RAISED_ELBOWS[f"elbow.{outer}"]
-            key_pose(arm_obj, f, pose)
+            c = 0.13 if s > 0 else 0.15
+            fwd, right = body_axes(SIDE_YAW)
+            sh = fwd * (0.05 * s)
+            p = side_base(crouch=c, spine_rot=(22 if s > 0 else 2, -6, 0), chest_rot=(6 if s > 0 else 0, -6, 0),
+                          head_rot=(-12 if s > 0 else 2, -30, 0))
+            p["hips"] = (sh.x, 0.015 + sh.y, D - c)
+            if s > 0:
+                arms(p, SIDE_YAW - 12, c, hand_R=(0.3, 0.28, 0.1), hand_L=(-0.32, 0.05, 0.04))
+            else:
+                arms(p, SIDE_YAW - 12, c, hand_R=(0.26, 0.34, 0.16), hand_L=(-0.24, 0.32, 0.12),
+                     elbow_R=(0.4, -0.1, -0.2), elbow_L=(-0.4, -0.1, -0.2))
+            p["hand_rot.L"] = (-25, 0, 20)
+            p["hand_rot.R"] = (-25, 0, -20)
+            key_pose(arm_obj, f, p)
 
-    # --- İtme: 0 = sol ayak önde yere bastı, 24 = sol ayak arkada (parmakla senkron) ---
+    # --- İtişler arası (hızlanırken): gövde öne dönük, arka ayak kaykayda ön ayağın arkasında ---
+    PUSH_YAW = 16.0
+    PUSH_FRONT = (0.0, -0.13, 12.0)
+    READY_BACK = (0.0, 0.16, 38.0)
+
+    def ready_pose(k=0.0):
+        c = 0.1 + 0.01 * k
+        p = side_base(crouch=c, yaw=PUSH_YAW, front=PUSH_FRONT, back=READY_BACK,
+                      spine_rot=(16, -4, 0), chest_rot=(4, -2, 0), neck_rot=(-6, -4, 0), head_rot=(-12, -6, 0))
+        arms(p, PUSH_YAW - 6, c, hand_R=(0.24, 0.06, 0.02 + 0.01 * k), hand_L=(-0.24, 0.04, 0.02 - 0.01 * k))
+        return p
+
+    act("ride_ready")
+    for f, k in ((0, 0.0), (20, 1.0), (40, 0.0)):
+        key_pose(arm_obj, f, ready_pose(k))
+
+    # --- İtme: güçlü ve derin. 0 = sol ayak kaykayın yanında havada, hemen yere basar;
+    #     24 = bacak arkada gergin, parmak ucuyla yerden kalkıyor (parmakla senkron). Ön diz
+    #     derin bükülür, gövde öne eğilir, kollar bacağa karşı geniş sallanır. ---
+    def push_pose(t):
+        e = t * t * (3 - 2 * t)
+        c = 0.17 + 0.11 * min(t / 0.65, 1.0)
+        p = side_base(crouch=c, yaw=PUSH_YAW, front=PUSH_FRONT, back=SIDE_BACK,
+                      hips_rot=(10 + 12 * e, PUSH_YAW, 0), spine_rot=(14 + 8 * e, -4, 0), chest_rot=(4, -2, 0),
+                      neck_rot=(-8, -4, 0), head_rot=(-18 - 10 * e, -6, 0))
+        p["hips"] = (0.03, -0.05 + 0.02 * e, D - c)
+        toe = max(0.0, (t - 0.82) / 0.18)
+        drop = (1.0 - min(t / 0.12, 1.0)) ** 2           # kaykayın yanından inip yere basış
+        p["foot.L"] = (0.19, -0.1 + 0.74 * e, 0.075 + 0.07 * toe + 0.09 * drop)
+        p["foot_rot.L"] = (-50 * toe, 0, 6)
+        p["knee.L"] = (0.24, -0.5, 0.45)
+        p["knee.R"] = (-0.08, -0.7, 0.55)
+        hz = 0.62 + D - c
+        p["hand.L"] = (0.3, 0.24 - 0.56 * e, hz + 0.16 * e)
+        p["hand.R"] = (-0.3, -0.22 + 0.5 * e, hz + 0.1 * (1 - e))
+        p["elbow.L"] = lerp((0.3, 0.6, 0.7), (0.4, 0.35, 0.5), e)
+        p["elbow.R"] = lerp((-0.4, 0.35, 0.5), (-0.3, 0.6, 0.7), e)
+        p["hand_rot.L"] = (-30 + 20 * e, 0, 10)
+        p["hand_rot.R"] = (-10 - 20 * e, 0, -10)
+        return p
+
     act("push")
-    for f in range(0, 25, 3):
-        t = f / 24.0
-        foot_y = -0.22 + 0.72 * t
-        swing = math.sin(t * math.pi)
-        key_pose(arm_obj, f, ride_base(
-            crouch=0.11,
-            hips=(0.01, -0.03, D - 0.11),
-            spine_rot=(22 + 4 * swing, -6 + 12 * t, 3),
-            head_rot=(-14, 4 - 8 * t, 0),
-            **{"foot.L": (0.16, foot_y, 0.075 + (0.025 if t > 0.92 else 0.0)),
-               "foot_rot.L": (-25 * t, 0, 0),
-               "foot.R": RIGHT_ON_BOARD,
-               # Kollar itmeye karşı sallanır: sol kol öne, sağ kol arkaya (ve tersi)
-               "hand.L": (0.26, -0.08 + 0.2 * t, 0.63 + D - 0.11 + 0.02 * swing),
-               "hand.R": (-0.26, 0.1 - 0.2 * t, 0.64 + D - 0.11 + 0.02 * swing),
-               "hand_rot.L": (-30 + 30 * t, 0, 10), "hand_rot.R": (-30 * t, 0, -10)}))
+    for f in range(0, 25):
+        key_pose(arm_obj, f, push_pose(f / 24.0))
+
+    # --- İtmeden dönüş: arkadaki ayak yerden kalkar, kaykayın dışından yay çizip yukarıdan
+    #     arka vidaların üstüne basar; gövde itişler arası duruşa döner (ride_ready'nin ilk karesi).
+    #     Godot'ta itme bitince bir kez oynar (PUSH_RET_FRAMES / 30 sn). ---
+    act("push_ret")
+    p0, p1 = push_pose(1.0), ready_pose(0.0)
+    f0, f1 = Vector(p0["foot.L"]), Vector(p1["foot.L"])
+    for f in range(0, PUSH_RET_FRAMES + 1):
+        u = f / PUSH_RET_FRAMES
+        k = u * u * (3 - 2 * u)
+        p = blend_pose(p0, p1, k)
+        kx = min(max((u - 0.45) / 0.55, 0.0), 1.0)
+        kx = kx * kx * (3 - 2 * kx)                      # kaykayın üstüne ancak yukarıdayken girer
+        p["foot.L"] = (f0.x + (f1.x - f0.x) * kx, f0.y + (f1.y - f0.y) * k,
+                       f0.z + (f1.z - f0.z) * u + 0.17 * math.sin(math.pi * u) ** 0.7)
+        p["foot_rot.L"] = lerp(p0["foot_rot.L"], p1["foot_rot.L"], k)
+        p["knee.L"] = lerp(p0["knee.L"], p1["knee.L"], k)
+        key_pose(arm_obj, f, p)
+
+    # --- Yüksek hız (dik yokuş aşağı): derin "tuck". Gövde neredeyse yatay, arka diz ön
+    #     baldırın arkasına kilitli, eller sırtta birleşik, baş kalkık ileri bakar. ---
+    act("ride_tuck")
+    TY = 24.0
+    for f, k in ((0, 0.0), (30, 1.0), (60, 0.0)):
+        c = 0.3 + 0.008 * k
+        p = side_base(crouch=c, yaw=TY, front=(0.0, -0.2, 26.0), back=(0.0, 0.13, 58.0),
+                      hips_rot=(40, TY, 0), spine_rot=(18, -4, 0), chest_rot=(8, -4, 0),
+                      neck_rot=(-30, -8, 0), head_rot=(-34, -8, 0))
+        f_ax, _ = body_axes(TY)
+        p["hips"] = (f_ax.x * 0.02, 0.04, D - c)
+        p["knee.R"] = (0.12, -0.75, 0.6)
+        p["knee.L"] = (0.16, -0.5, 0.15)
+        arms(p, TY - 8, c, hand_R=(0.04, -0.16, 0.06 + 0.005 * k), hand_L=(-0.04, -0.16, 0.06 + 0.005 * k),
+             elbow_R=(0.4, -0.45, 0.35), elbow_L=(-0.4, -0.45, 0.35))
+        p["hand_rot.L"] = (40, 0, 30)
+        p["hand_rot.R"] = (40, 0, -30)
+        key_pose(arm_obj, f, p)
 
     # --- Fren: sol ayak arkada yerde sürtüyor, gövde geride, kollar öne denge ---
     act("brake")
@@ -629,54 +836,63 @@ def make_actions(arm_obj):
                "hand.R": (-0.28, -0.08 + 0.01 * k, 0.71 + D - 0.09),
                "hand_rot.L": (-35, 0, 15), "hand_rot.R": (-35, 0, -15)}))
 
-    # --- İniş / ollie hazırlığı: derin çömelme, kollar aşağı-dışa ---
+    # --- İniş / ollie hazırlığı: derin çömelme (yan duruş), kollar aşağı-dışa ---
     act("crouch")
     for f in (0, 12):
-        key_pose(arm_obj, f, ride_base(
-            crouch=0.2, spine_rot=(26, 0, 0), head_rot=(-18, 0, 0),
-            **{"hand.L": (0.32, -0.18, 0.6 + D - 0.2), "hand.R": (-0.32, -0.16, 0.6 + D - 0.2),
-               "hand_rot.L": (-30, 0, 30), "hand_rot.R": (-30, 0, -30)}))
+        p = side_base(crouch=0.22, spine_rot=(26, -6, 0), head_rot=(-16, -30, 0))
+        arms(p, SIDE_YAW - 12, 0.22, hand_R=(0.34, 0.2, -0.04), hand_L=(-0.34, 0.16, -0.04),
+             elbow_R=(0.45, -0.2, -0.1), elbow_L=(-0.45, -0.2, -0.1))
+        p["hand_rot.L"] = (-30, 0, 30)
+        p["hand_rot.R"] = (-30, 0, -30)
+        key_pose(arm_obj, f, p)
 
-    # --- Havada: dizler toplanmış, kollar açık ve yukarıda ---
+    # --- Havada (merdivenden iniş referansı): dizler toplu, arka kol başın üstüne kalkık,
+    #     ön kol yana-öne açık, baş inişe bakar ---
     act("air")
     for f, k in ((0, 0.0), (12, 1.0), (24, 0.0)):
-        pose = ride_base(crouch=0.12, spine_rot=(12, 0, 3 * k), board=(0, 0, TUCK))
-        pose["foot.L"] = (LEFT_ON_BOARD[0], LEFT_ON_BOARD[1], LEFT_ON_BOARD[2] + TUCK)
-        pose["foot.R"] = (RIGHT_ON_BOARD[0], RIGHT_ON_BOARD[1], RIGHT_ON_BOARD[2] + TUCK)
-        pose["hand.L"] = (0.38, 0.0, 0.82 + D - 0.12 + 0.02 * k)
-        pose["hand.R"] = (-0.37, 0.03, 0.8 + D - 0.12 - 0.01 * k)
-        pose["hand_rot.L"] = (-15, 0, 35)
-        pose["hand_rot.R"] = (-15, 0, -35)
-        pose.update(RAISED_ELBOWS)
-        key_pose(arm_obj, f, pose)
+        c = 0.13
+        p = side_base(crouch=c, dz=TUCK, spine_rot=(10, -6, 3 * k), head_rot=(4, -28, 0))
+        arms(p, SIDE_YAW - 12, c, TUCK, hand_R=(0.42, 0.16, 0.12 + 0.02 * k), hand_L=(-0.5, -0.1, 0.5 - 0.03 * k),
+             elbow_R=(0.45, -0.2, -0.05), elbow_L=(-0.45, -0.3, 0.05))
+        p["hand_rot.L"] = (-15, 0, 35)
+        p["hand_rot.R"] = (-15, 0, -35)
+        key_pose(arm_obj, f, p)
 
-    # --- Ollie: dizler yay gibi çöker, kuyruk yere vurur, kaykay ayaklardan bir an
-    #     ayrılıp havada geri gelir. Fiziksel sıçrama OLLIE_POP_FRAME'de başlar. ---
+    # --- Ollie (referans: eğil, zıpla, kuyruğa vur, ön ayağı buruna sürt, dizleri topla).
+    #     Fiziksel sıçrama OLLIE_POP_FRAME'de başlar. ---
     act("ollie")
-    LB, RB = LEFT_ON_BOARD, RIGHT_ON_BOARD
-
-    def on_board(dz, front_dy=0.0, back_dy=0.0):
-        return {"foot.L": (LB[0], LB[1] + back_dy, LB[2] + dz), "foot.R": (RB[0], RB[1] + front_dy, RB[2] + dz)}
-
     ollie_keys = [
-        # kare, çömelme, kaykay (y, z), kaykay burun açısı, arka ayak dz, ön ayak (dy, dz), kollar z
-        (0, 0.05, (0, 0.0), 0, 0.0, (0.0, 0.0), 0.0),
-        (2, 0.15, (0, 0.0), 0, 0.0, (0.0, 0.0), -0.04),
-        (3, 0.18, (0, 0.0), 0, 0.0, (0.0, 0.0), -0.05),     # en derin çökme -> pat!
-        (4, 0.03, (0.02, 0.1), 24, 0.0, (-0.06, 0.16), 0.05),  # kuyruk vurdu, burun kalktı, ön ayak süzülüyor
-        (5, 0.06, (0.0, 0.17), 12, 0.2, (-0.07, 0.27), 0.08),  # kaykay ayaklardan ayrık yükseliyor
-        (6, 0.1, (0.0, 0.19), 3, 0.24, (-0.03, 0.25), 0.08),
-        (7, 0.12, (0.0, 0.19), 0, 0.19, (0.0, 0.19), 0.07),     # ayaklar kaykayı yakaladı
-        (12, 0.12, (0.0, TUCK), 0, TUCK, (0.0, TUCK), 0.05),    # havada toplu duruş (air ile aynı)
+        # kare, çömelme, kaykay (y, z), burun açısı, arka ayak dz, ön ayak (dy, dz), kollar
+        (0, 0.06, (0, 0.0), 0, 0.0, (0.0, 0.0), 0.0),
+        (2, 0.19, (0, 0.0), 0, 0.0, (0.0, 0.0), -0.06),
+        (3, 0.23, (0, 0.0), 0, 0.0, (0.0, 0.0), -0.08),      # en derin çökme -> pat!
+        (4, 0.04, (0.02, 0.1), 26, 0.0, (-0.08, 0.33), 0.08),  # kuyruk vurdu, burun kalktı, ön ayak sürtüyor
+        (5, 0.07, (0.0, 0.17), 13, 0.21, (-0.1, 0.28), 0.14),  # kaykay ayaklardan ayrık yükseliyor
+        (6, 0.12, (0.0, 0.2), 3, 0.26, (-0.05, 0.27), 0.16),
+        (7, 0.14, (0.0, 0.2), 0, 0.2, (0.0, 0.2), 0.15),      # ayaklar kaykayı yakaladı
+        (12, 0.13, (0.0, TUCK), 0, TUCK, (0.0, TUCK), 0.12),  # havada toplu duruş (air'e yakın)
     ]
-    for f, crouch, (by, bz), pitch, back_dz, (fdy, fdz), arm_dz in ollie_keys:
-        pose = ride_base(crouch=crouch, spine_rot=(10 + crouch * 60, 0, 0), board=(0, by, bz),
-                         board_rot=(pitch, 0, 0))
-        pose["foot.L"] = (LB[0], LB[1] + (0.12 if pitch > 15 else 0.0), LB[2] + back_dz)
-        pose["foot.R"] = (RB[0], RB[1] + fdy, RB[2] + fdz)
-        pose["hand.L"] = (0.27 + arm_dz, -0.02, 0.7 + D - crouch + arm_dz * 2)
-        pose["hand.R"] = (-0.27 - arm_dz, -0.02, 0.7 + D - crouch + arm_dz * 2)
-        key_pose(arm_obj, f, pose)
+    # Her kare ayrı anahtar (doğrusal ara değer): kaykay ve ayak eğrileri farklı biçimlenip
+    # ayak tahtaya gömülmesin
+    dense = []
+    for f in range(ollie_keys[-1][0] + 1):
+        i = max(j for j in range(len(ollie_keys)) if ollie_keys[j][0] <= f)
+        k0 = ollie_keys[i]
+        k1 = ollie_keys[min(i + 1, len(ollie_keys) - 1)]
+        t = 0.0 if k1[0] == k0[0] else (f - k0[0]) / float(k1[0] - k0[0])
+        mix = lambda x, y: tuple(mix(xx, yy) for xx, yy in zip(x, y)) if isinstance(x, tuple) else x + (y - x) * t
+        dense.append((f,) + tuple(mix(x, y) for x, y in zip(k0[1:], k1[1:])))
+    for f, crouch, (by, bz), pitch, back_dz, (fdy, fdz), arm_up in dense:
+        p = side_base(crouch=crouch, spine_rot=(10 + crouch * 70, -6, 0), head_rot=(-6 - crouch * 40, -30, 0),
+                      board=(0, by, bz), board_rot=(pitch, 0, 0))
+        fr, frr = foot_on((SIDE_FRONT[0], SIDE_FRONT[1] + fdy), SIDE_FRONT[2], fdz)
+        bk, bkr = foot_on((SIDE_BACK[0], SIDE_BACK[1] + (0.06 if pitch > 15 else 0.0)), SIDE_BACK[2], back_dz)
+        p["foot.R"], p["foot.L"] = fr, bk
+        p["knee.R"] = knee_pole(fr, SIDE_YAW, along=-0.12, z=0.5 + fdz)
+        p["knee.L"] = knee_pole(bk, SIDE_YAW, along=0.08, z=0.5 + back_dz)
+        arms(p, SIDE_YAW - 12, crouch, hand_R=(0.3 + arm_up, 0.1, arm_up * 1.2), hand_L=(-0.3 - arm_up * 1.2, -0.03, arm_up * 2.4),
+             elbow_R=(0.45, -0.25, -0.1), elbow_L=(-0.4, -0.25, 0.1))
+        key_pose(arm_obj, f, p)
 
     # --- Double jump: daha yükseğe, ayaklar dizlere çekilir, kaykay kendi ekseninde
     #     360° döner (kickflip), ayaklar yakalar ---
@@ -689,58 +905,84 @@ def make_actions(arm_obj):
         lift = math.sin(min(t / 0.8, 1.0) * math.pi)         # ayakların yukarı çekilmesi
         board_z = TUCK + 0.05 * math.sin(t * math.pi)
         feet_z = board_z + 0.2 * lift
-        pose = ride_base(crouch=0.14, spine_rot=(16, 0, 0), board=(0, 0, board_z),
-                         board_rot=(0, spin, 0))
-        pose["foot.L"] = (LB[0] + 0.03 * lift, LB[1], LB[2] + feet_z)
-        pose["foot.R"] = (RB[0] - 0.05 * lift, RB[1], RB[2] + feet_z)
-        pose["hand.L"] = (0.36, 0.0, 0.84 + D - 0.14)
-        pose["hand.R"] = (-0.35, 0.02, 0.82 + D - 0.14)
-        pose["hand_rot.L"] = (-15, 0, 30)
-        pose["hand_rot.R"] = (-15, 0, -30)
-        pose.update(RAISED_ELBOWS)
-        key_pose(arm_obj, f, pose)
+        p = side_base(crouch=0.15, spine_rot=(18, -6, 0), head_rot=(4, -26, 0),
+                      board=(0, 0, board_z), board_rot=(0, spin, 0))
+        fr, _ = foot_on((SIDE_FRONT[0] + 0.04 * lift, SIDE_FRONT[1]), SIDE_FRONT[2], feet_z)
+        bk, _ = foot_on((SIDE_BACK[0] + 0.04 * lift, SIDE_BACK[1]), SIDE_BACK[2], feet_z)
+        p["foot.R"], p["foot.L"] = fr, bk
+        p["knee.R"] = knee_pole(fr, SIDE_YAW, along=-0.12, z=0.6 + feet_z)
+        p["knee.L"] = knee_pole(bk, SIDE_YAW, along=0.08, z=0.6 + feet_z)
+        arms(p, SIDE_YAW - 12, 0.15, hand_R=(0.42, 0.12, 0.2), hand_L=(-0.5, -0.1, 0.45),
+             elbow_R=(0.45, -0.2, -0.05), elbow_L=(-0.45, -0.3, 0.05))
+        p["hand_rot.L"] = (-15, 0, 30)
+        p["hand_rot.R"] = (-15, 0, -30)
+        key_pose(arm_obj, f, p)
 
-    # --- Grind: çömelik, kollar iki yana açık, denge salınımı ---
+    # --- Grind (düz ray / kenar): alçak, gövde öne-rayın üstüne eğik, kollar iki yana
+    #     açık (ön kol öne, arka kol arkaya), baş aşağı rayı izler, denge salınımı ---
     act("grind")
     for f, k in ((0, -1.0), (15, 1.0), (30, -1.0)):
-        key_pose(arm_obj, f, ride_base(
-            crouch=0.15, spine_rot=(16, 0, 4 * k),
-            **RAISED_ELBOWS,
-            **{"hand.L": (0.42, -0.02, 0.8 + D - 0.15 + 0.03 * k),
-               "hand.R": (-0.42, -0.02, 0.8 + D - 0.15 - 0.03 * k),
-               "hand_rot.L": (-10, 0, 40), "hand_rot.R": (-10, 0, -40)}))
+        c = 0.18
+        p = side_base(crouch=c, spine_rot=(26, -8, 4 * k), chest_rot=(6, -6, 0), head_rot=(-2, -26, 0))
+        arms(p, SIDE_YAW - 14, c, hand_R=(0.48, 0.12, 0.06 + 0.04 * k), hand_L=(-0.46, 0.08, 0.08 - 0.04 * k),
+             elbow_R=(0.5, -0.2, -0.05), elbow_L=(-0.5, -0.2, -0.05))
+        p["hand_rot.L"] = (-10, 0, 40)
+        p["hand_rot.R"] = (-10, 0, -40)
+        key_pose(arm_obj, f, p)
 
-    # --- Yürüme (kaykay sağ elde): sol kol sallanır, sağ kol az ---
+    # --- Aşağı eğimli ray (merdiven korkuluğu): gövde dik ve hafif geride (ağırlık arka
+    #     ayakta), arka kol başın üstüne kalkık, ön kol öne-aşağı, dizler yumuşak ---
+    act("grind_down")
+    for f, k in ((0, -1.0), (15, 1.0), (30, -1.0)):
+        c = 0.13
+        p = side_base(crouch=c, spine_rot=(4, -8, 5 * k), chest_rot=(-4, -8, 0), head_rot=(8, -30, 0))
+        p["hips"] = (0.0, 0.05, D - c)
+        arms(p, SIDE_YAW - 14, c, hand_R=(0.38, 0.22, -0.02 + 0.03 * k), hand_L=(-0.5, -0.12, 0.55 - 0.04 * k),
+             elbow_R=(0.45, -0.2, -0.1), elbow_L=(-0.45, -0.3, 0.05))
+        p["hand_rot.L"] = (-10, 0, 40)
+        p["hand_rot.R"] = (-10, 0, -40)
+        key_pose(arm_obj, f, p)
+
+    # --- Yürüme (kaykay sağ elde): kollar omuzdan sarkaç (sol kol bacağın tersine), dirsek
+    #     öne giderken biraz daha bükülür; kalça adımla döner, göğüs tersine; kalça adımda
+    #     destek ayağına kayar. Kaykayı tutan sağ kol az sallanır. ---
     act("walk")
     n = WALK["frames"]
     for f in range(0, n + 1):
         u = f / n
         ph = math.tau * u
-        pose = stand_pose(hips=(0.0, 0.0, -0.03 + 0.012 * math.cos(2 * ph)),
-                          spine_rot=(4, 3 * math.cos(ph), 0))
+        c = math.cos(ph)
+        hips = (0.012 * math.sin(ph), 0.0, -0.03 + 0.012 * math.cos(2 * ph))
+        pose = stand_pose(hips=hips, hips_rot=(0, -6 * c, 0), spine_rot=(4, 4 * c, 0), chest_rot=(0, 3 * c, 0),
+                          head_rot=(0, -1 * c, 0))
         pose.update(gait_pose(u, WALK))
-        # Kollar sarkık, bacağın tersine hafif sallanır (sol ayak öndeyken sol kol geride)
-        pose["hand.L"] = (0.23, 0.1 * math.cos(ph), 0.635)
-        pose["hand.R"] = (-0.27, 0.03 - 0.03 * math.cos(ph), 0.66)
+        sw = -22 * c                                     # sol ayak öndeyken sol kol geride
+        swing_arm(pose, "L", sw, 10 + 16 * max(sw, 0.0) / 22, out=0.06, hips=hips, lean=4, yaw=1 * c)
+        swing_arm(pose, "R", 4 + 5 * c, 14, out=0.08, hips=hips, lean=4, yaw=1 * c)
+        pose["hand_rot.L"] = (-12 - 8 * max(sw, 0.0) / 22, 0, 8)
         key_pose(arm_obj, f, pose)
 
-    # --- Koşu: uçuş anlı adım, gövde öne eğik, kollar gevşek ve hafif bükük ---
+    # --- Koşu: uçuş anlı adım, gövde öne eğik, kollar dirsekten ~80° bükük ve omuzdan güçlü
+    #     sallanır (sol kol bacağın tersine), göğüs kalçanın tersine döner. ---
     act("run")
     n = RUN["frames"]
     for f in range(0, n + 1):
         u = f / n
         ph = math.tau * u
+        c = math.cos(ph)
         # İki ayak havadayken (uçuş) kalça yükselir
         bob = 0.025 * math.cos(2 * math.tau * (u - RUN["duty"] * 0.5))
-        pose = stand_pose(hips=(0.0, -0.025, -0.05 + bob), spine_rot=(12, 4 * math.cos(ph), 0),
-                          head_rot=(-6, -3 * math.cos(ph), 0))
+        hips = (0.008 * math.sin(ph), -0.025, -0.05 + bob)
+        pose = stand_pose(hips=hips, hips_rot=(0, -9 * c, 0), spine_rot=(12, 6 * c, 0), chest_rot=(2, 5 * c, 0),
+                          head_rot=(-6, -2 * c, 0))
         # Koşuda ayaklar neredeyse tek çizgiye basar, dizler düz öne kalkar
         pose.update(gait_pose(u, RUN, side_x=0.055))
         pose["knee.L"] = (0.07, -0.6, 0.5)
         pose["knee.R"] = (-0.07, -0.6, 0.5)
-        pose["hand.L"] = (0.22, 0.14 * math.cos(ph), 0.7)
-        pose["hand.R"] = (-0.28, 0.03 - 0.03 * math.cos(ph), 0.67)
-        pose["hand_rot.L"] = (-15, 0, 8)
+        sw = -38 * c
+        swing_arm(pose, "L", sw, 70 + 15 * max(sw, 0.0) / 38, out=0.05, hips=hips, lean=14, yaw=2 * c)
+        swing_arm(pose, "R", 2 + 10 * c, 24, out=0.09, hips=hips, lean=14, yaw=2 * c)
+        pose["hand_rot.L"] = (-20, 0, 10)
         key_pose(arm_obj, f, pose)
 
     # --- Ayakta bekleme ---
@@ -748,44 +990,95 @@ def make_actions(arm_obj):
     for f, k in ((0, 0.0), (30, 1.0), (60, 0.0)):
         key_pose(arm_obj, f, stand_pose(hips=(0, 0, -0.012 - 0.006 * k), chest_rot=(-2 * k, 0, 0)))
 
-    # --- Binme: koşarak kaykayı öne at, üstüne zıpla (karakter ileri MOUNT_SPEED ile gider) ---
+    # --- Binme (referans 1): kaykay elde yürürken öne eğilip onu yere bırakır, sağ (ön) ayakla
+    #     üstüne basar, sol ayakla bir kez iter, ayağı kaykaya alır. Kök MOUNT_SPEED ile ilerler:
+    #     yerdeki kaykay ve yere basan ayak köke göre geriye kayar (zeminde kaymazlar).
+    #     Son kare itişler arası duruş (ride_ready): oyunda sürüşe dikişsiz geçer. ---
     act("mount")
-    release_f, land_f = 6, 14
+    V = MOUNT_SPEED / FPS
+    LAND, PLANT, PUSH_END = 8, 14, 20
+
+    def board_y(f):
+        if f <= LAND:
+            return -0.17 - (LAND - f) * V                # yerde duruyor
+        return -0.17 * (1.0 - (f - LAND) / float(MOUNT_FRAMES - LAND))   # gövde kaykayın üstüne geçer
+
+    def shifted(p, dy):
+        q = dict(p)
+        for key in ("foot.R", "knee.R", "hips"):
+            q[key] = (q[key][0], q[key][1] + dy, q[key][2])
+        return q
+
+    def sm(x):
+        x = min(max(x, 0.0), 1.0)
+        return x * x * (3 - 2 * x)
+
+    walk0 = stand_pose(hips=(0.0, 0.0, -0.035), spine_rot=(6, 0, 0), hips_rot=(0, 0, 0))
+    walk0["foot.L"] = (0.1, -0.18, 0.075)
+    walk0["foot.R"] = (-0.1, 0.22, 0.075)
+    walk0["foot_rot.R"] = (-25, 0, 0)
+    walk0["foot_rot.L"] = (0, 0, 0)
+    walk0.update({"chest_rot": (0, 0, 0), "neck_rot": (0, 0, 0), "head_rot": (0, 0, 0)})
+    b0 = shifted(push_pose(0.0), board_y(LAND))
+    l_lift = (0.1, -0.18 + 10 * V, 0.075)
     for f in range(0, MOUNT_FRAMES + 1):
-        t = f / FPS
-        if f <= land_f - 3:
-            ph = math.tau * f / 10.0
-            pose = stand_pose(hips=(0, -0.03, -0.04 + 0.03 * math.cos(2 * ph)), spine_rot=(16, 0, 0))
-            pose.update(run_legs(ph, stride=0.3, lift=0.16))
-            pose["hand.L"] = (0.22, 0.2 * math.cos(ph), 0.8)
-        else:
-            # Zıpla ve kaykaya in
-            k = (f - (land_f - 3)) / 3.0
-            jump = math.sin(min(k, 1.0) * math.pi) * 0.14
-            pose = ride_base(crouch=0.1 - jump, spine_rot=(14, 0, 0))
-            pose["hand.L"] = (0.36, 0.02, 0.85 + D - 0.1 + jump)
-            pose["hand.R"] = (-0.36, 0.0, 0.85 + D - 0.1 + jump)
-            if f < land_f:
-                pose["foot.L"] = (0.035, 0.17, D + 0.075 + jump * 1.2)
-                pose["foot.R"] = (-0.035, -0.11, D + 0.075 + jump * 1.2)
-        # Kaykay: elde -> öne savrulur -> yere düşer, karakter yetişip üstüne çıkar
-        if f < release_f - 2:
-            pose["carry"] = 1.0
-            pose["hand.R"] = (-0.27, 0.03 - 0.1 * f / release_f, 0.66)
-        elif f < release_f:
-            pose["carry"] = 1.0 - (f - (release_f - 2)) / 2.0
-            pose["hand.R"] = (-0.28, -0.3, 0.6)
-            pose["board"] = (0.0, -0.8, 0.12)
-        else:
-            pose["carry"] = 0.0
-            if f <= land_f:
-                y = -0.8 + MOUNT_SPEED * (t - release_f / FPS)
-                y = min(y, 0.0)
+        by = board_y(f)
+        if f <= LAND:
+            k = f / LAND
+            e = sm(k)
+            pose = blend_pose(walk0, b0, e)
+            pose["foot.L"] = (0.1, -0.18 + f * V, 0.075)
+            pose["foot_rot.L"] = (-30 * sm((f - 5) / 3.0), 0, 0)
+            pose["knee.L"] = LIMB_POLES["knee.L"]
+            r0, r1 = Vector(walk0["foot.R"]), Vector(b0["foot.R"])
+            pr = r0.lerp(r1, e)
+            pose["foot.R"] = (pr.x, pr.y, pr.z + 0.21 * math.sin(math.pi * k))
+            # Eğilip kaykayı bırakış (2..6. kare)
+            dip = math.sin(math.pi * min(max((f - 1) / 6.0, 0.0), 1.0))
+            sp = pose["spine_rot"]
+            pose["spine_rot"] = (sp[0] + 18 * dip, sp[1], sp[2])
+            hp = pose["hips"]
+            pose["hips"] = (hp[0], hp[1], hp[2] - 0.05 * dip)
+            if f <= 2:
+                pose["hand.R"] = STAND_HAND_R
+            elif f <= 6:
+                pose["hand.R"] = lerp(STAND_HAND_R, (-0.13, by - 0.02, 0.36), sm((f - 2) / 4.0))
             else:
-                y = 0.0
-            pose["board"] = (0.0, y, 0.05 if f == release_f else 0.0)
-            if f <= land_f - 3:
-                pose["hand.R"] = (-0.3, -0.1, 0.7)
+                pose["hand.R"] = lerp((-0.13, board_y(6) - 0.02, 0.36), b0["hand.R"], sm((f - 6) / 2.0))
+            pose["carry"] = 1.0 - sm((f - 3) / 3.0)
+            swing_arm(pose, "L", -15 + 40 * e, 12 + 20 * e, out=0.08, hips=pose["hips"], lean=8)
+        elif f <= PLANT:
+            pose = shifted(push_pose(0.0), by)
+            if f <= 10:
+                pose["foot.L"] = (0.1, -0.18 + f * V, 0.075)
+                pose["foot_rot.L"] = (-30 - 10 * (f - LAND), 0, 0)
+            else:
+                k = (f - 10) / float(PLANT - 10)
+                a0, a1 = Vector(l_lift), Vector((0.19, -0.1, 0.075))
+                pl = a0.lerp(a1, sm(k))
+                pose["foot.L"] = (pl.x, pl.y, pl.z + 0.12 * math.sin(math.pi * k))
+                pose["foot_rot.L"] = lerp((-50, 0, 0), (0, 0, 6), sm(k))
+            pose["carry"] = 0.0
+        elif f <= PUSH_END:
+            t = (f - PLANT) / float(PUSH_END - PLANT)
+            pose = shifted(push_pose(t), by)
+            toe = max(0.0, (t - 0.75) / 0.25)
+            pose["foot.L"] = (0.19, -0.1 + (f - PLANT) * V, 0.075 + 0.06 * toe)
+            pose["foot_rot.L"] = (-45 * toe, 0, 6)
+        else:
+            k = (f - PUSH_END) / float(MOUNT_FRAMES - PUSH_END)
+            p0 = shifted(push_pose(1.0), by)
+            p0["foot.L"] = (0.19, -0.1 + (PUSH_END - PLANT) * V, 0.135)
+            p0["foot_rot.L"] = (-45, 0, 6)
+            p1 = ready_pose(0.0)
+            pose = blend_pose(p0, p1, sm(k))
+            f0, f1 = Vector(p0["foot.L"]), Vector(p1["foot.L"])
+            kx = sm((k - 0.4) / 0.6)
+            pose["foot.L"] = (f0.x + (f1.x - f0.x) * kx, f0.y + (f1.y - f0.y) * sm(k),
+                              f0.z + (f1.z - f0.z) * k + 0.15 * math.sin(math.pi * k) ** 0.7)
+        pose["board"] = (0.0, by, 0.0)
+        if f > 6:
+            pose["carry"] = 0.0
         key_pose(arm_obj, f, pose)
 
     # --- İnme: kaykaydan atla, eğil, kaykayı altından çekip ele al ---
@@ -810,7 +1103,7 @@ def make_actions(arm_obj):
                               spine_rot=(30 * (1 - k), -10 * (1 - k), 0))
             pose["foot.L"] = lerp((0.17, 0.08, 0.075), (0.11, 0.01, 0.075), k)
             pose["foot.R"] = lerp((-0.17, -0.06, 0.075), (-0.11, 0.01, 0.075), k)
-            pose["hand.R"] = lerp((-0.13, 0.0, D + 0.07), (-0.27, 0.03, 0.66), k)
+            pose["hand.R"] = lerp((-0.13, 0.0, D + 0.07), STAND_HAND_R, k)
         pose["board"] = (0.0, 0.0, 0.0)
         key_pose(arm_obj, f, pose)
 
@@ -913,19 +1206,62 @@ def make_actions(arm_obj):
             pose["hand_rot.R"] = (40, 0, -10)
         key_pose(arm_obj, f, pose)
 
-    # --- Yayayken havada (zıplama): dizler toplanır, serbest kol yukarı, kaykay sağ elde ---
+    # --- Yaya zıplaması (sıçrayış): çömelik kalkış (kollar geride) -> bacaklar açılır, parmak
+    #     uçları aşağı, kollar öne-yukarı savrulur -> dizler göğse toplanır. Godot'ta zıplama
+    #     anında baştan oynar (YAYA_ZIPLA_FRAMES / 30), sonra yaya_hava döngüsüne geçer. ---
+    def foot_air(lift_l, lift_r, fwd_l=-0.04, fwd_r=0.06, pitch=-20):
+        return {"foot.L": (0.12, fwd_l, 0.075 + lift_l), "foot.R": (-0.12, fwd_r, 0.075 + lift_r),
+                "foot_rot.L": (pitch, 0, 0), "foot_rot.R": (pitch * 0.6, 0, 0)}
+
+    def air_pose(k=0.0):
+        hips = (0.0, 0.0, -0.04 - 0.01 * k)
+        p = stand_pose(hips=hips, spine_rot=(10, 0, 0), head_rot=(-6, 0, 0))
+        p.update(foot_air(0.17 + 0.02 * k, 0.13 + 0.02 * k))
+        p["knee.L"] = (0.15, -0.8, 0.6)
+        p["knee.R"] = (-0.15, -0.8, 0.6)
+        swing_arm(p, "L", 50 + 4 * k, 40, out=0.16, hips=hips, lean=10)
+        swing_arm(p, "R", 12, 46, out=0.12, hips=hips, lean=10)        # kaykayı dizlerden kaldırır
+        p["hand_rot.L"] = (-25, 0, 25)
+        return p
+
+    act("yaya_zipla")
+    zip_keys = [
+        # kare, kalça z, gövde öne, sol ayak / sağ ayak yükseklik, parmak eğimi, sol kol açısı, dirsek
+        (0, -0.13, 16, 0.0, 0.0, 0, -35, 20),
+        (2, -0.02, 8, 0.03, 0.0, -35, 20, 25),
+        (4, 0.0, 4, 0.1, 0.06, -40, 60, 30),
+        (7, -0.03, 8, 0.17, 0.13, -25, 56, 38),
+    ]
+    for f, hz, lean, ll, lr, pitch, sw, bend in zip_keys:
+        hips = (0.0, 0.0, hz)
+        pose = stand_pose(hips=hips, spine_rot=(lean, 0, 0), head_rot=(-lean * 0.4, 0, 0))
+        pose.update(foot_air(ll, lr, pitch=pitch))
+        if f >= 4:
+            pose["knee.L"] = (0.15, -0.8, 0.6)
+            pose["knee.R"] = (-0.15, -0.8, 0.6)
+        swing_arm(pose, "L", sw, bend, out=0.1 + 0.06 * (f >= 4), hips=hips, lean=lean)
+        swing_arm(pose, "R", sw * 0.15 + 6, 20 + 26 * (f >= 4), out=0.1 + 0.02 * (f >= 4), hips=hips, lean=lean)
+        key_pose(arm_obj, f, pose)
+    key_pose(arm_obj, YAYA_ZIPLA_FRAMES, air_pose(0.0))
+
+    # --- Yayayken havada (döngü): dizler toplu, serbest kol yukarıda dengede, kaykay sağ elde ---
     act("yaya_hava")
     for f, k in ((0, 0.0), (10, 1.0), (20, 0.0)):
-        pose = stand_pose(hips=(0, 0.0, -0.04 - 0.01 * k), spine_rot=(10, 0, 0), head_rot=(-6, 0, 0))
-        pose["foot.L"] = (0.12, -0.04, 0.24 + 0.02 * k)
-        pose["foot.R"] = (-0.12, 0.06, 0.2 + 0.02 * k)
-        pose["foot_rot.L"] = (-20, 0, 0)
-        pose["foot_rot.R"] = (-10, 0, 0)
-        pose["knee.L"] = (0.15, -0.8, 0.6)
-        pose["knee.R"] = (-0.15, -0.8, 0.6)
-        pose["hand.L"] = (0.34, -0.06, 0.92 + 0.02 * k)
-        pose["hand_rot.L"] = (-20, 0, 30)
-        pose["elbow.L"] = RAISED_ELBOWS["elbow.L"]
+        key_pose(arm_obj, f, air_pose(k))
+
+    # --- Yaya inişi: ayaklar yere değer, dizler yükü alır (derin çökme), kollar öne-aşağı,
+    #     sonra doğrulur. Godot: iniş anında bir kez (YAYA_INIS_FRAMES / 30). ---
+    act("yaya_inis")
+    land_keys = [(0, -0.05, 8, 30, 30), (3, -0.17, 20, 18, 26), (6, -0.1, 12, 6, 16), (YAYA_INIS_FRAMES, -0.012, 0, 0, 10)]
+    for f, hz, lean, sw, bend in land_keys:
+        hips = (0.0, 0.01, hz)
+        pose = stand_pose(hips=hips, spine_rot=(lean, 0, 0), head_rot=(-lean * 0.5, 0, 0))
+        pose["foot.L"] = (0.12, -0.02, 0.075)
+        pose["foot.R"] = (-0.12, 0.05, 0.075)
+        pose["knee.L"] = (0.18, -0.7, 0.45)
+        pose["knee.R"] = (-0.18, -0.7, 0.45)
+        swing_arm(pose, "L", sw, bend, out=0.1, hips=hips, lean=lean)
+        swing_arm(pose, "R", 4 + sw * 0.2, 14, out=0.09, hips=hips, lean=lean)
         key_pose(arm_obj, f, pose)
 
     # --- Yayayken araba çarpması: geriye savrulur, poposunun üstüne düşer (kaykay sağ elde
@@ -937,7 +1273,7 @@ def make_actions(arm_obj):
     feet_fwd = ((0.13, -0.32, 0.075), (-0.13, -0.3, 0.075))
     foot_keys = [
         # kare, kalça delta, gövde, kafa, sol el, sağ el, ayaklar, diz yukarı
-        (0, (0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), (0.25, 0.02, 0.63), (-0.27, 0.03, 0.66), ((0.11, 0.01, 0.075), (-0.11, 0.01, 0.075)), False),
+        (0, (0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), STAND_HAND_L, STAND_HAND_R, ((0.11, 0.01, 0.075), (-0.11, 0.01, 0.075)), False),
         (3, (0.02, 0.1, -0.03), (-24, 6, 8), (-20, 0, 0), (0.42, 0.05, 0.95), (-0.3, 0.1, 0.72), ((0.12, -0.12, 0.2), (-0.1, -0.05, 0.075)), False),
         (7, (0.04, 0.32, -0.32), (-30, 8, 10), (-24, 10, 0), (0.46, 0.25, 0.75), (-0.32, 0.25, 0.55), ((0.13, -0.2, 0.36), (-0.1, -0.25, 0.3)), True),
         (11, (0.05, 0.42, sit), (-22, 4, 4), (10, 0, 0), (0.27, 0.72, 0.06), (-0.3, 0.55, 0.25), feet_fwd, True),
@@ -947,7 +1283,7 @@ def make_actions(arm_obj):
         (27, (0.05, 0.42, sit), (-10, 6, 0), (8, 12, -16), (0.27, 0.72, 0.06), (-0.3, 0.5, 0.3), feet_fwd, True),
         (32, (0.03, 0.34, sit + 0.12), (30, 0, 0), (-10, 0, 0), (0.2, 0.12, 0.32), (-0.3, 0.25, 0.4), ((0.13, 0.32, 0.075), (-0.13, 0.3, 0.075)), True),
         (38, (0.0, 0.3, -0.2), (34, 0, 0), (-16, 0, 0), (0.17, 0.2, 0.42), (-0.29, 0.2, 0.55), ((0.12, 0.34, 0.075), (-0.12, 0.32, 0.075)), False),
-        (45, (0.0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), (0.25, 0.02, 0.63), (-0.27, 0.03, 0.66), ((0.11, 0.01, 0.075), (-0.11, 0.01, 0.075)), False),
+        (45, (0.0, 0.0, -0.012), (0, 0, 0), (0, 0, 0), STAND_HAND_L, STAND_HAND_R, ((0.11, 0.01, 0.075), (-0.11, 0.01, 0.075)), False),
     ]
     for f, hips, spine, head, hl, hr, (fl, fr), knees_up in foot_keys:
         # Kalça 0 karede ayakta, sonra ayakların gerisine (karakter geriye düşer, sonra öne kalkar)
@@ -1130,19 +1466,27 @@ def render_previews(arm_obj, acts):
     cam = bpy.data.objects.new("Kamera", cam_data)
     scene.collection.objects.link(cam)
     scene.camera = cam
-    a = math.radians(-50)
-    d = Vector((math.sin(a), -math.cos(a), 0.25)).normalized()
-    cam.location = Vector((0, -0.2, 0.75)) + d * 4.0
-    cam.rotation_euler = (math.radians(90 - 14.5), 0, a)
     os.makedirs(PREVIEW_DIR, exist_ok=True)
+    # KK_ACTS: yalnız bu eylemler; KK_VIEWS: açılar (0 = önden, 180 = arkadan, oyun kamerası)
+    only = [x for x in os.environ.get("KK_ACTS", "").split(",") if x]
+    views = [float(x) for x in os.environ.get("KK_VIEWS", "-50").split(",")]
+    nfr = int(os.environ.get("KK_FRAMES", "3"))
     for name in acts:
+        if only and name not in only:
+            continue
         act = bpy.data.actions[name]
         arm_obj.animation_data.action = act
         f0, f1 = act.frame_range
-        for tag, f in (("a", f0), ("b", (f0 + f1) / 2), ("c", f1)):
-            scene.frame_set(int(f))
-            scene.render.filepath = os.path.join(PREVIEW_DIR, f"poz_{name}_{tag}.png")
-            bpy.ops.render.render(write_still=True)
+        for vi, deg in enumerate(views):
+            a = math.radians(deg)
+            d = Vector((math.sin(a), -math.cos(a), 0.25)).normalized()
+            cam.location = Vector((0, 0.0, 0.7)) + d * 4.0
+            cam.rotation_euler = (math.radians(90 - 14.5), 0, a)
+            for i in range(nfr):
+                f = f0 + (f1 - f0) * (i / max(nfr - 1, 1))
+                scene.frame_set(int(round(f)))
+                scene.render.filepath = os.path.join(PREVIEW_DIR, f"poz_{name}_v{vi}_{i}.png")
+                bpy.ops.render.render(write_still=True)
 
 
 def main():

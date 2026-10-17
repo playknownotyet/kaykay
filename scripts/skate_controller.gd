@@ -31,16 +31,25 @@ signal item_stowed(item: String)    # eşya çantada
 # --- Ayar panelinden değiştirilebilen değerler ---
 @export var gravity := 14.5
 ## Düz zeminde kendiliğinden yavaşlama (m/sn²).
-@export var rolling_resistance := 0.19
+@export var rolling_resistance := 0.09
 ## Hızın karesiyle artan hava direnci; azami hızı yumuşakça sınırlar.
-@export var air_drag := 0.009
-## Ayak yere bastığında hızın ayak hızına ne kadar çabuk yaklaştığı.
-@export var push_grip := 3.9
+@export var air_drag := 0.0045
+## İtme gücü (m/sn²): ayak yere bastığı sürece verdiği ivme. Kaykay ayak hızına
+## push_taper (m/sn) kadar yaklaşınca azalır, ayak hızında biter.
+@export var push_grip := 14.0
+@export var push_taper := 2.0
 @export var brake_strength := 6.8
+## Atalet: ivme (itme, yokuş) ve yavaşlama (sürtünme, fren) hıza birden değil, bu tepki
+## hızıyla (1/sn) yumuşakça biner. Düşük = daha ağır, kütleli; hız değişimi ivmeli artar / azalır.
+@export var drive_response := 5.0
+@export var resist_response := 2.5
+## Yokuş aşağı itmede ayak hızına eklenen pay: eğim ivmesi (m/sn²) başına m/sn, en çok
+@export var downhill_push_gain := 1.3
+@export var downhill_push_max := 4.5
 ## Ayakla geri itmenin verimi (1 = ileri itme kadar kolay). Düşük = daha çok efor.
 @export var reverse_efficiency := 0.5
 @export var reverse_max_speed := 2.9
-@export var max_speed := 14.0
+@export var max_speed := 16.0
 ## Hızlıyken en dar dönüş yarıçapı (metre).
 @export var turn_radius := 2.5
 ## Dururken / çok yavaşken dönüş hızı (rad/sn).
@@ -84,8 +93,9 @@ signal item_stowed(item: String)    # eşya çantada
 signal foot_jumped
 
 # Binme / inme animasyonlarıyla aynı süre ve hız (tools/blender/karakter_rig.py)
-const MOUNT_TIME := 0.5
-const MOUNT_SPEED := 3.0
+## Binme: kaykayı yere bırakıp üstüne basar ve bir kez iter (karakter_rig.py MOUNT_FRAMES / 30)
+const MOUNT_TIME := 0.8
+const MOUNT_SPEED := 2.2
 const DISMOUNT_TIME := 0.5
 enum BoardAnim { NONE, MOUNTING, DISMOUNTING }
 
@@ -162,6 +172,8 @@ const STOW_DROP := 14.0 / 30.0
 var _stow_t := -1.0
 
 var _coyote := 0.0
+var _drive_acc := 0.0           # o anki itici ivme (m/sn²): itme + yokuş, yumuşatılmış
+var _resist_acc := 0.0          # o anki yavaşlatıcı ivme: sürtünme + fren, yumuşatılmış
 var _ollie_buffer := 0.0
 var _ollie_lock := 0.0
 var _spawn := Transform3D.IDENTITY
@@ -345,23 +357,33 @@ func _ground_move(inp: Node, delta: float) -> void:
 	var g := Vector3.DOWN * gravity
 	var g_on_plane := g - n * g.dot(n)
 
-	# Eğimde yerçekimi hızlandırır / yavaşlatır
-	speed += g_on_plane.dot(fwd) * delta
+	# İtici ivme: eğimde yerçekimi hızlandırır / yavaşlatır
+	var drive := g_on_plane.dot(fwd)
 
 	# İtme: ayak, kaykaydan daha hızlı geriye gidiyorsa hızlandırır.
 	# Böylece yavaş sürtmek yüksek hızda işe yaramaz, hızlı sürtmek yarar.
 	if inp.foot_contact:
 		if inp.gesture == SkateInput.Gesture.PUSH:
-			speed += push_grip * maxf(inp.foot_speed - speed, 0.0) * delta
+			# Yokuş aşağı ayak, kaykayla birlikte zaten hızlanan zemine basar: eğim itmenin
+			# ulaşabileceği hızı yükseltir (düzdeki en yüksek itme hızıyla aynı kalmasın)
+			var downhill := maxf(g_on_plane.dot(fwd), 0.0)
+			var foot: float = inp.foot_speed + minf(downhill * downhill_push_gain, downhill_push_max)
+			drive += push_grip * clampf((foot - speed) / push_taper, 0.0, 1.0)
 		elif inp.gesture == SkateInput.Gesture.REVERSE:
 			# Ayak ileri doğru iter, kaykay geri gider. Verim düşük: daha çok efor.
 			var rev_foot := minf(inp.foot_speed * reverse_efficiency, reverse_max_speed)
-			speed -= push_grip * maxf(rev_foot + speed, 0.0) * delta
+			drive -= push_grip * clampf((rev_foot + speed) / push_taper, 0.0, 1.0)
 
+	var resist := rolling_resistance + air_drag * speed * speed
 	if inp.brake > 0.0:
-		speed = move_toward(speed, 0.0, brake_strength * inp.brake * delta)
+		resist += brake_strength * inp.brake
 
-	speed = move_toward(speed, 0.0, (rolling_resistance + air_drag * speed * speed) * delta)
+	# Atalet: ivmeler yumuşakça değişir (itme bitince etkisi bir an sürer, fren yavaşça
+	# oturur); hız böylece ivmeli artar ve azalır
+	_drive_acc = lerpf(_drive_acc, drive, 1.0 - exp(-drive_response * delta))
+	_resist_acc = lerpf(_resist_acc, resist, 1.0 - exp(-resist_response * delta))
+	speed += _drive_acc * delta
+	speed = move_toward(speed, 0.0, _resist_acc * delta)
 	speed = clampf(speed, -max_speed * 0.5, max_speed)
 
 	# Direksiyon: hızlıyken sabit yarıçap, yavaşken en az belli bir dönüş hızı
@@ -529,8 +551,8 @@ func _handle_walls() -> void:
 
 # ---------- Yaya ----------
 
-## Kaykaydan in / kaykaya bin. Animasyonlu: binerken koşup kaykayı öne atar ve
-## üstüne zıplar; inerken kaykaydan atlayıp onu altından çekip eline alır.
+## Kaykaydan in / kaykaya bin. Animasyonlu: binerken yürürken kaykayı yere bırakır,
+## üstüne basıp bir kez iter; inerken kaykaydan atlayıp onu altından çekip eline alır.
 func toggle_board() -> void:
 	if board_anim != BoardAnim.NONE or held_item != "" or bag_open or sitting:
 		return
@@ -563,7 +585,7 @@ func _board_anim_move(delta: float) -> void:
 	if board_anim == BoardAnim.MOUNTING and board_anim_time >= MOUNT_TIME:
 		board_anim = BoardAnim.NONE
 		on_foot = false
-		speed = MOUNT_SPEED
+		speed = MOUNT_SPEED + 1.0        # son karedeki itiş
 		SkateInput.set_on_foot(false)
 		mode_changed.emit(false)
 	elif board_anim == BoardAnim.DISMOUNTING and board_anim_time >= DISMOUNT_TIME:

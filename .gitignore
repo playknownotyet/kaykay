@@ -13,3 +13,4 @@ __pycache__/
 # Testler ve geçici dosyalar
 tests/tmp/
 /x
+*.mov

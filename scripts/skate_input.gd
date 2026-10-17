@@ -22,7 +22,7 @@ var stroke_length := 0.5
 var brake_length := 0.15
 ## Parmak hızı (ekran yüksekliği/sn) -> ayak hızı (m/sn) çarpanı.
 var swipe_to_mps := 7.9
-var max_foot_speed := 9.5
+var max_foot_speed := 10.9
 ## Bu hızın (m/sn) altında yukarı sürtmek fren değil, geri itmedir.
 var reverse_threshold := 0.4
 ## İterken tam dönüş için parmağın yana gitmesi gereken mesafe (ekran genişliği oranı).
@@ -67,7 +67,7 @@ var _kb_stroke_t := -1.0
 var _kb_cooldown := 0.0
 const KB_STROKE_TIME := 0.28
 const KB_RECOVER_TIME := 0.3
-const KB_FOOT_SPEED := 9.0
+const KB_FOOT_SPEED := 10.4
 
 
 # ---------- Dokunmatik arayüzün çağırdığı fonksiyonlar ----------

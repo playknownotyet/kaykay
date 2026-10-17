@@ -5,6 +5,10 @@ extends Node3D
 ## - Animasyonlar bir AnimationTree ile yumuşak geçişlerle oynatılır.
 ##   Sürüşte yavaş/hızlı ve sola/sağa dönüş pozları hıza ve direksiyona göre
 ##   sürekli karışır: kollar ve gövde sürüşe canlı tepki verir.
+## - Süzülürken yan duruş (sağ ayak önde, gövde yana); iterken ve itişler arasında
+##   gövde öne döner, itme bitince yavaşça yana geri döner.
+## - Dik yokuş aşağı yüksek hızda "tuck" (eller sırtta, gövde yatay).
+## - Grind'de düz rayda alçak duruş, aşağı eğimli rayda dik duruş ve kalkık kol.
 ## - Kaykay iskeletin bir kemiği: binme/inme/elde taşıma animasyonun parçası.
 ## - İtme animasyonu kendi kendine oynamaz: her karede parmağın konumuna göre
 ##   sarılır, böylece sol ayak parmağı izler (geri itmede tersine).
@@ -14,15 +18,20 @@ extends Node3D
 
 const MODEL := preload("res://assets/karakter/karakter.glb")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
-const STATES := ["ride", "push", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount", "dus", "tutun", "yaya_hava", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "canta_acik",
-	"eline_al", "cantaya_koy", "havada_cirpin", "otur"]
-const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "brake", "air", "grind", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut", "otur"]
+const STATES := ["ride", "push", "push_ret", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount", "dus", "tutun", "yaya_hava", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "canta_acik",
+	"yaya_zipla", "yaya_inis", "eline_al", "cantaya_koy", "havada_cirpin", "otur"]
+const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "ride_tuck", "brake", "air", "grind", "grind_down", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut", "otur"]
 ## Ollie animasyonunda fiziksel sıçramanın olduğu an (karakter_rig.py OLLIE_POP_FRAME / 30)
 const OLLIE_POP_TIME := 0.1
+## İtmeden dönüş (ayak kaykaya geri biner): karakter_rig.py PUSH_RET_FRAMES / 30
+const PUSH_RET_TIME := 10.0 / 30.0
+## Yaya zıplaması ve inişi (karakter_rig.py YAYA_ZIPLA_FRAMES / YAYA_INIS_FRAMES)
+const YAYA_ZIPLA_TIME := 12.0 / 30.0
+const YAYA_INIS_TIME := 10.0 / 30.0
 
 @export var lean_angle := 17.0          # dönüşte en fazla eğilme (derece)
 @export var align_sharpness := 14.0
-@export var anim_blend := 0.15
+@export var anim_blend := 0.2
 ## Yürüme / koşu animasyonu 1x hızda kaç m/sn'ye denk geliyor (ayak kaymasın diye).
 ## karakter_rig.py'deki WALK / RUN ölçülerinden: 2 * amp / (duty * döngü süresi)
 @export var walk_anim_speed := 1.273
@@ -43,6 +52,23 @@ const OLLIE_POP_TIME := 0.1
 @export var sway_max := 0.55
 ## Bu hızda (m/sn) "hızlı sürüş" pozu tam devrede.
 @export var fast_ride_speed := 8.0
+
+@export_group("Duruş")
+## İtme bittikten sonra gövde bu kadar süre öne dönük kalır (sn), sonra yana döner
+@export var push_face_hold := 0.55
+## Öne dönme / yana geri dönme hızı (1/sn)
+@export var face_in_rate := 10.0
+@export var face_out_rate := 2.6
+## Yüksek hız pozu: bu hızın (km/s) ve yokuş eğiminin (yükselme / yol) üstünde,
+## bu kadar süre (sn) kesintisiz kalınca girer; altına düşünce çıkar.
+## Adada yolların en dik yeri %9: serpantinin çoğu, şehirde yalnız birkaç dik sokak.
+@export var tuck_kmh := 31.0
+@export var tuck_grade := 0.06
+@export var tuck_delay := 0.5
+@export var tuck_exit_kmh := 26.0
+@export var tuck_exit_grade := 0.035
+## Grind: bu eğimin (yükselme / ray) üstündeki raylarda "aşağı ray" pozu tam devrede
+@export var grind_down_grade := 0.25
 
 var controller: SkateController
 
@@ -72,6 +98,18 @@ var _turn_blend := 0.0
 var _hold_blend := 0.0
 var _skel: Skeleton3D
 var _hand_l := -1
+var _tr: AnimationNodeTransition
+var _face := 0.0             # 1 = gövde öne dönük (itme), 0 = yan duruş
+var _face_hold := 0.0
+var _tuck := 0.0
+var _tuck_on := false
+var _tuck_t := 0.0
+var _grade_s := 0.0          # yumuşatılmış yokuş eğimi (tümsekler pozu bozmasın)
+var _grind_slope := 0.0
+var _ret_armed := false      # itme sürdü: bitince dönüş oynar
+var _ret_t := 0.0
+var _foot_jump_t := 99.0     # yaya zıplamasından beri
+var _foot_land_t := 99.0     # yaya inişinden beri
 
 
 ## Eldeki eşyanın düğümü sol ele oturur (eşyanın kökü avucun biraz altında)
@@ -113,6 +151,14 @@ func _ready() -> void:
 		_tree.set("parameters/%s_seek/seek_request" % fall, 0.0)
 		_kick_arms(Vector2(-1.2, 1.6)))
 	controller.ollie_started.connect(func(): _start_special("ollie", 0.0))
+	controller.foot_jumped.connect(func():
+		_foot_jump_t = 0.0
+		_foot_land_t = 99.0
+		_enter("yaya_zipla"))
+	controller.landed.connect(func(_impact: float):
+		if controller.on_foot and _air_t > 0.15:
+			_foot_land_t = 0.0
+			_enter("yaya_inis"))
 	controller.double_jumped.connect(func():
 		_start_special("flip", 0.0)
 		_kick_arms(Vector2(0.2, 1.2)))
@@ -126,6 +172,8 @@ func _ready() -> void:
 	var skel: Skeleton3D = _model.find_child("Skeleton3D", true, false)
 	_sway = ArmSway.new()
 	skel.add_child(_sway)
+	# Geçişlerde ayak tahtaya gömülmesin (en son çalışır)
+	skel.add_child(FootGuard.new())
 	_prev_yaw = atan2(controller.heading.x, controller.heading.z)
 	controller.ollied.connect(func(): _kick_arms(Vector2(0.0, 1.6)))
 	controller.landed.connect(func(impact: float): _kick_arms(Vector2(-0.4, -0.5) * clampf(impact / 4.0, 0.0, 1.5)))
@@ -194,6 +242,7 @@ func _setup_animation() -> void:
 	var bt := AnimationNodeBlendTree.new()
 	var tr := AnimationNodeTransition.new()
 	tr.xfade_time = anim_blend
+	_tr = tr
 	for st in STATES:
 		tr.add_input(st)
 	bt.add_node("state", tr)
@@ -215,7 +264,24 @@ func _setup_animation() -> void:
 	bt.connect_node("ride_turn", 0, "a_turn_l")
 	bt.connect_node("ride_turn", 1, "ride_speed")
 	bt.connect_node("ride_turn", 2, "a_turn_r")
-	bt.connect_node("state", STATES.find("ride"), "ride_turn")
+	# Yüksek hız (tuck) ve itişler arası öne dönük duruş sürüşün üstüne karışır
+	bt.add_node("a_tuck", anim.call("ride_tuck"))
+	bt.add_node("tuck", AnimationNodeBlend2.new())
+	bt.connect_node("tuck", 0, "ride_turn")
+	bt.connect_node("tuck", 1, "a_tuck")
+	bt.add_node("a_ready", anim.call("ride_ready"))
+	bt.add_node("face", AnimationNodeBlend2.new())
+	bt.connect_node("face", 0, "tuck")
+	bt.connect_node("face", 1, "a_ready")
+	bt.connect_node("state", STATES.find("ride"), "face")
+
+	# Grind: düz ray <-> aşağı eğimli ray
+	bt.add_node("a_grind", anim.call("grind"))
+	bt.add_node("a_grind_down", anim.call("grind_down"))
+	bt.add_node("grind_slope", AnimationNodeBlend2.new())
+	bt.connect_node("grind_slope", 0, "a_grind")
+	bt.connect_node("grind_slope", 1, "a_grind_down")
+	bt.connect_node("state", STATES.find("grind"), "grind_slope")
 
 	# İtme: hız 0, konum her karede parmaktan gelir
 	bt.add_node("push_anim", anim.call("push"))
@@ -233,13 +299,13 @@ func _setup_animation() -> void:
 		bt.connect_node("state", STATES.find(st), st + "_scale")
 
 	# Zıplamalar: bir noktadan başlatılabilir (rampadan / raydan çıkışta "pat" anından)
-	for st in ["ollie", "flip", "dus", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "eline_al", "cantaya_koy"]:
+	for st in ["ollie", "flip", "push_ret", "yaya_zipla", "yaya_inis", "dus", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "eline_al", "cantaya_koy"]:
 		bt.add_node(st + "_anim", anim.call(st))
 		bt.add_node(st + "_seek", AnimationNodeTimeSeek.new())
 		bt.connect_node(st + "_seek", 0, st + "_anim")
 		bt.connect_node("state", STATES.find(st), st + "_seek")
 
-	for st in ["brake", "crouch", "air", "grind", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "otur"]:
+	for st in ["brake", "crouch", "air", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "otur"]:
 		bt.add_node(st, anim.call(st))
 		bt.connect_node("state", STATES.find(st), st)
 
@@ -283,9 +349,25 @@ func _bone_track_paths(bones: Array) -> Array:
 	return out
 
 
+## Tek seferlik bir duruma baştan gir
+func _enter(st: String) -> void:
+	_set_state(st)
+	_tree.set("parameters/%s_seek/seek_request" % st, 0.0)
+
+
 func _set_state(st: String) -> void:
 	if st == _state:
 		return
+	# Geçiş süresi: dönüş hareketi itişler arası duruşla aynı karede biter (kısa);
+	# frene girip çıkarken gövde dönüyor (uzun)
+	var xf := anim_blend
+	if _state == "push_ret" and st == "ride":
+		xf = 0.08
+	elif st == "brake" or _state == "brake":
+		xf = 0.28
+	elif _state == "push" and st == "push_ret":
+		xf = 0.1
+	_tr.xfade_time = xf
 	_state = st
 	_tree.set("parameters/state/transition_request", st)
 
@@ -314,8 +396,14 @@ func _update_animation() -> void:
 		st = "dismount"
 	elif controller.on_foot:
 		var v := controller.speed
-		if not controller.grounded and _air_t > 0.06:
+		_foot_jump_t += dt
+		_foot_land_t += dt
+		if not controller.grounded and _foot_jump_t < YAYA_ZIPLA_TIME:
+			st = "yaya_zipla"
+		elif not controller.grounded and _air_t > 0.06:
 			st = "yaya_hava"
+		elif _foot_land_t < (YAYA_INIS_TIME if v < 2.6 else YAYA_INIS_TIME * 0.5):
+			st = "yaya_inis"
 		elif v > 2.6:
 			st = "run"
 			_tree.set("parameters/run_scale/scale", clampf(v / run_anim_speed, 0.6, 2.5))
@@ -342,6 +430,21 @@ func _update_animation() -> void:
 		push_t = 1.0 - inp.push_progress
 	elif inp.gesture == SkateInput.Gesture.BRAKE:
 		st = "brake"
+	# İtme bitince ayak bir kez kaykaya geri biner (yeni itme ya da başka durum keser)
+	if st == "push" and inp.gesture == SkateInput.Gesture.PUSH:
+		_ret_armed = true
+	elif _ret_armed and st == "ride":
+		if _state != "push_ret":
+			_ret_t = 0.0
+			_set_state("push_ret")
+			_tree.set("parameters/push_ret_seek/seek_request", 0.0)
+		_ret_t += dt
+		if _ret_t < PUSH_RET_TIME:
+			st = "push_ret"
+		else:
+			_ret_armed = false
+	elif st != "push":
+		_ret_armed = false
 	_set_state(st)
 	if push_t >= 0.0:
 		_tree.set("parameters/push_seek/seek_request", push_t * _push_len)
@@ -359,6 +462,49 @@ func _update_animation() -> void:
 	_tree.set("parameters/hold/blend_amount", _hold_blend)
 	_update_held_node()
 	_tree.set("parameters/ride_turn/blend_amount", _turn_blend)
+	_update_stance(st, dt)
+
+
+## Yan duruş / öne dönük duruş, yüksek hız ve grind eğimi karışımları
+func _update_stance(st: String, dt: float) -> void:
+	var inp := SkateInput
+	var pushing := st == "push" or st == "push_ret" or st == "mount" or st == "brake" \
+		or (inp.gesture == SkateInput.Gesture.PUSH and not controller.on_foot)
+	if pushing:
+		_face_hold = push_face_hold
+	else:
+		_face_hold = maxf(_face_hold - dt, 0.0)
+	var want_face := 1.0 if _face_hold > 0.0 else 0.0
+	_face = move_toward(_face, want_face, (face_in_rate if want_face > _face else face_out_rate) * dt)
+	# Yumuşak başlangıç / bitiş (gövde dönüşü sarsılmasın)
+	_tree.set("parameters/face/blend_amount", _face * _face * (3.0 - 2.0 * _face))
+
+	var kmh := absf(controller.speed) * 3.6
+	var grade := -controller.forward_on_ground.normalized().y * signf(controller.speed)
+	if controller.grounded:
+		_grade_s = lerpf(_grade_s, grade, 1.0 - exp(-3.0 * dt))
+	grade = _grade_s
+	# Arazideki tümseklerde kısa havalanmalar sayılmaz
+	var riding := not controller.on_foot and not controller.grinding and (controller.grounded or _air_t < 0.35)
+	if _tuck_on:
+		if not riding or kmh < tuck_exit_kmh or grade < tuck_exit_grade or _face > 0.5:
+			_tuck_on = false
+	if not _tuck_on:
+		if riding and kmh > tuck_kmh and grade > tuck_grade and _face < 0.5:
+			_tuck_t += dt
+			if _tuck_t >= tuck_delay:
+				_tuck_on = true
+		else:
+			_tuck_t = 0.0
+	# Havada kısa kopmalar (tümsek) tuck'u bozmasın: yalnız yerde değişir
+	if controller.grounded or controller.grinding or not _tuck_on:
+		_tuck = move_toward(_tuck, 1.0 if _tuck_on else 0.0, 2.2 * dt)
+	_tree.set("parameters/tuck/blend_amount", _tuck * _tuck * (3.0 - 2.0 * _tuck))
+
+	if controller.grinding:
+		var g := clampf(-controller.grind_dir.normalized().y / maxf(grind_down_grade, 0.01), 0.0, 1.0)
+		_grind_slope = lerpf(_grind_slope, g, 1.0 - exp(-8.0 * dt))
+	_tree.set("parameters/grind_slope/blend_amount", _grind_slope)
 
 
 func _on_stumbled() -> void:
