@@ -127,6 +127,16 @@ func _ready() -> void:
 		city.initial_shop = level.get_meta("dukkan")
 	world.add_child(city)
 
+	# İç mekân geçişleri: içerideyken dış dünya gizli ve durur
+	var interiors := IcMekan.new()
+	interiors.name = "IcMekan"
+	interiors.player = player
+	interiors.follow_cam = camera
+	interiors.ui_parent = self
+	interiors.world = world
+	interiors.outside = [level, crowd, traffic, city, benches]
+	add_child(interiors)
+
 	var ui := CanvasLayer.new()
 	ui.layer = 2
 	add_child(ui)

@@ -252,8 +252,10 @@ func _terrain_chunk(i0: int, j0: int, cells: int, stride: int, center: Vector3) 
 	for r in rows - 1:
 		for c in cols - 1:
 			var a := r * cols + c
-			# Plan y yukarı = Godot -z: üçgen sırası yukarı bakan normal verecek şekilde
-			idx.append_array([a, a + 1, a + cols, a + 1, a + cols + 1, a + cols])
+			# Köşegen çarpışma yükseklik haritasıyla (HeightMapShape3D) aynı: (i, j)-(i+1, j+1).
+			# Ters köşegende bükük karelerde görünen zemin çarpışmadan 1,5 m'ye kadar yukarıda
+			# kalıyor, karakter yer yer zemine gömülü görünüyordu. Sırayı _fix_winding düzeltir.
+			idx.append_array([a, a + 1, a + cols + 1, a, a + cols + 1, a + cols])
 	_fix_winding(verts, idx)
 	var mi := MeshInstance3D.new()
 	mi.mesh = _mesh(verts, idx, colors)

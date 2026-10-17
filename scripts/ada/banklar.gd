@@ -21,6 +21,7 @@ var player: SkateController
 var level: Node
 
 ## Her yer: {base: bankın tabanı (dünya), basis, x}
+static var instance: Banklar
 var seats: Array[Dictionary] = []
 var _owner := {}                   # yer -> oturan / yoldaki (Node)
 var _grid := {}                    # 16 m hücre -> yer listesi
@@ -29,6 +30,7 @@ var _near := -1
 
 
 func _ready() -> void:
+	instance = self
 	# Ada hazır sahneden gelir; çarpışma düğümleri zaten yerinde
 	if level:
 		_collect(level)
@@ -52,6 +54,31 @@ func _collect(root: Node) -> void:
 				if not _grid.has(key):
 					_grid[key] = []
 				_grid[key].append(id)
+
+
+## Dışarıdan bank ekle (şehirdeki parklar): tf adadaki bankların dönüşümüyle aynı (köken tabanda,
+## -Z sırt yönü). tag ile sonradan toplu silinir. Yer kimliklerini döner.
+func add_bench(tf: Transform3D, tag: String) -> Array[int]:
+	var ids: Array[int] = []
+	for x in SEAT_X:
+		var id := seats.size()
+		seats.append({"base": tf.origin, "basis": tf.basis.orthonormalized(), "x": x, "tag": tag})
+		var key := _cell(tf.origin)
+		if not _grid.has(key):
+			_grid[key] = []
+		_grid[key].append(id)
+		ids.append(id)
+	return ids
+
+
+## tag'li bankları kaldır (yerler kimlik kaymasın diye boş bırakılır)
+func remove_tagged(tag: String) -> void:
+	for id in seats.size():
+		if seats[id].get("tag", "") == tag:
+			seats[id]["base"] = Vector3(0, -1000, 0)
+			for key in _grid:
+				(_grid[key] as Array).erase(id)
+			_owner.erase(id)
 
 
 static func _cell(p: Vector3) -> Vector2i:

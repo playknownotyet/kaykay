@@ -150,6 +150,8 @@ var action_name := ""
 var action_time := 0.0
 ## Girdiler kilitli (soygunda kuş bakışı keşif): yürüme / zıplama / binme yok
 var input_locked := false
+## Girdi kilitliyken kendiliğinden yürüme (m/sn, yatay): kapıdan geçerken
+var auto_walk := Vector3.ZERO
 ## Ekranda gösterilecek bağlam butonları: [{id, icon}] (dükkan vb. her kare yazar)
 var context_buttons: Array = []
 
@@ -288,8 +290,15 @@ func _physics_process(delta: float) -> void:
 			velocity.x = 0.0
 			velocity.z = 0.0
 		if input_locked and fall_time <= 0.0 and action_time <= 0.0:
-			velocity.x = move_toward(velocity.x, 0.0, 12.0 * delta)
-			velocity.z = move_toward(velocity.z, 0.0, 12.0 * delta)
+			if auto_walk.length_squared() > 0.0001:
+				velocity.x = auto_walk.x
+				velocity.z = auto_walk.z
+				heading = Vector3(auto_walk.x, 0.0, auto_walk.z).normalized()
+				speed = auto_walk.length()
+			else:
+				velocity.x = move_toward(velocity.x, 0.0, 12.0 * delta)
+				velocity.z = move_toward(velocity.z, 0.0, 12.0 * delta)
+				speed = Vector2(velocity.x, velocity.z).length()
 		_fall_move(delta)
 		return
 

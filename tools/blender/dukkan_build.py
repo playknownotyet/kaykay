@@ -59,7 +59,26 @@ COLORS = {
     "kurabiye_b": (0.95, 0.85, 0.6), "macun": (0.15, 0.4, 0.85), "sampuan": (0.3, 0.7, 0.45),
     "konserve": (0.3, 0.55, 0.25), "yumurta": (0.75, 0.72, 0.68), "yumurta_b": (0.95, 0.9, 0.8),
     "portakal": (0.98, 0.55, 0.1), "limon": (0.98, 0.88, 0.25),
+    # yeni ürünler: etiketli yüzler "etiket" (doku atlası assets/dukkan/urun_etiket.png)
+    "etiket": (1.0, 1.0, 1.0), "su_govde": (0.72, 0.88, 0.97), "kola_ust": (0.83, 0.84, 0.86),
+    "karton": (0.78, 0.66, 0.48), "karton_koyu": (0.6, 0.5, 0.36), "yumurta_kabuk": (0.97, 0.9, 0.78),
+    "yumurta_beyaz": (0.98, 0.97, 0.94), "ekmek_acik": (0.93, 0.74, 0.42), "ekmek_alt": (0.6, 0.38, 0.18),
+    "bal_cam": (0.93, 0.6, 0.12), "bez_kirmizi": (0.85, 0.18, 0.18), "elma_acik": (0.95, 0.35, 0.25),
+    "macun_govde": (0.95, 0.96, 0.98), "macun_kapak": (0.15, 0.4, 0.85), "sampuan_kapak": (0.95, 0.95, 0.95),
+    "gevrek_kenar": (0.98, 0.78, 0.15), "cips_folyo": (0.95, 0.5, 0.1), "kurabiye_kutu": (0.16, 0.38, 0.72),
+    "sut_tepe": (0.97, 0.97, 0.95),
 }
+ETIKET_PNG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "dukkan", "urun_etiket.png")
+# Etiket atlası hücreleri (tools/blender/urun_etiket.py CELLS ile aynı sıra), 8 sütun x 2 satır
+LABELS = {n: i for i, n in enumerate(["kola", "su", "sut_on", "sut_yan", "gevrek_on", "gevrek_yan", "cips_on", "cikolata",
+                                      "bal", "kurabiye", "macun", "sampuan", "konserve", "yumurta_kapak"])}
+
+
+def cell_uv(name, u, v):
+    """Hücre içi (u, v) (0..1, v yukarı) -> atlas UV (Blender: v yukarı)."""
+    i = LABELS[name]
+    col, row = i % 8, i // 8
+    return ((col + u) / 8.0, 1.0 - (row + 1.0 - v) / 2.0)
 
 
 def mat(name):
@@ -72,6 +91,11 @@ def mat(name):
         bsdf = m.node_tree.nodes.get("Principled BSDF")
         bsdf.inputs["Base Color"].default_value = (*c, 1.0)
         bsdf.inputs["Roughness"].default_value = 0.7
+        if name == "etiket" and os.path.exists(ETIKET_PNG):
+            tex = m.node_tree.nodes.new("ShaderNodeTexImage")
+            tex.image = bpy.data.images.load(ETIKET_PNG)
+            tex.interpolation = 'Closest'
+            m.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     return m
 
 
@@ -81,6 +105,7 @@ class Part:
     def __init__(self, name):
         self.name = name
         self.bm = bmesh.new()
+        self.uv = self.bm.loops.layers.uv.new("UVMap")
         self.mats = []
 
     def mi(self, m):
@@ -88,16 +113,78 @@ class Part:
             self.mats.append(m)
         return self.mats.index(m)
 
-    def _faces(self, verts, faces, m):
+    def _faces(self, verts, faces, m, uvs=None):
+        """uvs: köşe başına UV listesi (verts ile aynı sıra) ya da None."""
         idx = self.mi(m)
         vs = [self.bm.verts.new(v) for v in verts]
         for f in faces:
             try:
                 face = self.bm.faces.new([vs[i] for i in f])
                 face.material_index = idx
+                if uvs is not None:
+                    for loop, vi in zip(face.loops, f):
+                        loop[self.uv].uv = uvs[vi]
             except ValueError:
                 pass
         return vs
+
+    def quad_uv(self, pts, m, label, rect=(0.0, 0.0, 1.0, 1.0)):
+        """Dörtgen pts (dışarıdan bakınca sol alt, sağ alt, sağ üst, sol üst), etiket hücresinin
+        rect (u0, v0, u1, v1) kısmı."""
+        u0, v0, u1, v1 = rect
+        uvs = [cell_uv(label, u0, v0), cell_uv(label, u1, v0), cell_uv(label, u1, v1), cell_uv(label, u0, v1)]
+        self._faces([Vector(p) for p in pts], [(0, 1, 2, 3)], m, uvs)
+
+    def label_box(self, c, s, faces):
+        """Kutu; faces: yön ('-y' ön, '+y' arka, '+x', '-x', '+z', '-z') -> (malzeme, etiket ya da None)."""
+        cx, cy, cz = c
+        hx, hy, hz = s[0] / 2, s[1] / 2, s[2] / 2
+        P = lambda x, y, z: (cx + x * hx, cy + y * hy, cz + z * hz)
+        quads = {
+            "-y": [P(-1, -1, -1), P(1, -1, -1), P(1, -1, 1), P(-1, -1, 1)],
+            "+y": [P(1, 1, -1), P(-1, 1, -1), P(-1, 1, 1), P(1, 1, 1)],
+            "+x": [P(1, -1, -1), P(1, 1, -1), P(1, 1, 1), P(1, -1, 1)],
+            "-x": [P(-1, 1, -1), P(-1, -1, -1), P(-1, -1, 1), P(-1, 1, 1)],
+            "+z": [P(-1, -1, 1), P(1, -1, 1), P(1, 1, 1), P(-1, 1, 1)],
+            "-z": [P(-1, 1, -1), P(1, 1, -1), P(1, -1, -1), P(-1, -1, -1)],
+        }
+        for k, pts in quads.items():
+            m, lab = faces.get(k, faces.get("*", ("beyaz", None)))
+            if lab:
+                self.quad_uv(pts, m, lab[0] if isinstance(lab, tuple) else lab, lab[1] if isinstance(lab, tuple) else (0, 0, 1, 1))
+            else:
+                self._faces([Vector(p) for p in pts], [(0, 1, 2, 3)], m)
+
+    def lathe(self, prof, m, seg=12, label=None, band=None, sy=1.0, cap_top=None, cap_bot=None, c=(0, 0, 0)):
+        """Dönel yüzey: prof [(r, z)] alttan üste; label: etiket (u çevre, ön -Y'de u = 0,5),
+        band: (z0, z1) etiketin sardığı aralık (o dilimler etiketli). sy: Y'de basıklık (oval)."""
+        rings = []
+        for (r, z) in prof:
+            ring = []
+            for k in range(seg + 1):
+                a = math.radians(-270.0 + 360.0 * k / seg)
+                ring.append(Vector((c[0] + math.cos(a) * r, c[1] + math.sin(a) * r * sy, c[2] + z)))
+            rings.append(ring)
+        for i in range(len(prof) - 1):
+            za, zb = prof[i][1], prof[i + 1][1]
+            labeled = label and band and za >= band[0] - 1e-6 and zb <= band[1] + 1e-6
+            for k in range(seg):
+                pts = [rings[i][k], rings[i][k + 1], rings[i + 1][k + 1], rings[i + 1][k]]
+                if labeled:
+                    # Etiket önde ve arkada birer kez (gerçek kutulardaki gibi): yarım çevre bir etiket.
+                    # seg 4'ün katı olmalı (dikiş köşeye denk gelsin)
+                    va = (za - band[0]) / (band[1] - band[0])
+                    vb = (zb - band[0]) / (band[1] - band[0])
+                    u0 = (2.0 * k / seg + 0.5) % 1.0
+                    u1 = u0 + 2.0 / seg
+                    uvs = [cell_uv(label, u0, va), cell_uv(label, u1, va), cell_uv(label, u1, vb), cell_uv(label, u0, vb)]
+                    self._faces(pts, [(0, 1, 2, 3)], "etiket", uvs)
+                else:
+                    self._faces(pts, [(0, 1, 2, 3)], m)
+        if cap_bot:
+            self._faces(rings[0][:seg], [tuple(reversed(range(seg)))], cap_bot)
+        if cap_top:
+            self._faces(rings[-1][:seg], [tuple(range(seg))], cap_top)
 
     def box(self, c, s, m, rot=0.0):
         """c: merkez, s: boyut; rot: Z ekseninde döndürme (derece)."""
@@ -572,98 +659,220 @@ def product(name):
 
 
 def build_products():
+    """Her ürün kendi biçiminde; ön yüz -Y (rafın önü). Etiketler piksel-art doku atlasından."""
     out = []
-    # Kola kutusu
+
+    # --- Kola kutusu: alt / üst daralan alüminyum, saran etiket, kapakta açma halkası ---
     P = product("kola")
-    P.cyl((0, 0, 0), 0.034, 0.012, "gumus", seg=10, r2=0.038)
-    P.cyl((0, 0, 0.012), 0.038, 0.1, "kola", seg=10)
-    P.cyl((0, 0, 0.05), 0.0385, 0.018, "beyaz", seg=10, cap=False)
-    P.cyl((0, 0, 0.112), 0.038, 0.012, "gumus", seg=10, r2=0.032)
+    P.lathe([(0.029, 0.0), (0.034, 0.008), (0.034, 0.008)], "gumus", seg=16, cap_bot="gumus")
+    P.lathe([(0.034, 0.008), (0.034, 0.11)], "kola", seg=16, label="kola", band=(0.008, 0.11))
+    P.lathe([(0.034, 0.11), (0.028, 0.121), (0.029, 0.124)], "gumus", seg=16, cap_top="kola_ust")
+    P.box((0.0, 0.006, 0.1245), (0.012, 0.022, 0.002), "gumus")
+    P.box((0.0, -0.008, 0.1245), (0.006, 0.006, 0.0025), "metal_koyu")
     out.append(P.build())
-    # Su şişesi
+
+    # --- Su şişesi: halkalı gövde, saran etiket, omuz, boyun, mavi kapak ---
     P = product("su")
-    P.cyl((0, 0, 0), 0.036, 0.15, "su", seg=10)
-    P.cyl((0, 0, 0.06), 0.0365, 0.05, "su_etiket", seg=10, cap=False)
-    P.cyl((0, 0, 0.15), 0.036, 0.05, "su", seg=10, r2=0.014)
-    P.cyl((0, 0, 0.2), 0.016, 0.022, "kapak_mavi", seg=8)
+    prof = [(0.03, 0.0), (0.034, 0.006), (0.034, 0.03), (0.032, 0.036), (0.034, 0.042), (0.034, 0.05)]
+    P.lathe(prof, "su_govde", seg=16, cap_bot="su_govde")
+    P.lathe([(0.034, 0.05), (0.034, 0.12)], "su_govde", seg=16, label="su", band=(0.05, 0.12))
+    P.lathe([(0.034, 0.12), (0.032, 0.14), (0.026, 0.16), (0.017, 0.178), (0.014, 0.186), (0.014, 0.196)], "su_govde", seg=16)
+    P.lathe([(0.017, 0.196), (0.017, 0.218), (0.014, 0.222)], "kapak_mavi", seg=12, cap_top="kapak_mavi", cap_bot="kapak_mavi")
     out.append(P.build())
-    # Süt kutusu (üçgen tepeli)
+
+    # --- Süt kutusu: üçgen tepeli karton, önde / arkada süt etiketi, yanlarda damla ---
     P = product("sut")
-    P.box((0, 0, 0.085), (0.075, 0.075, 0.17), "beyaz")
-    P.box((0, 0, 0.06), (0.077, 0.077, 0.05), "sut_mavi")
-    P.prism([(-0.0375, 0.17), (0.0375, 0.17), (0.0, 0.21)], -0.0375, 0.0375, "beyaz")
-    P.box((0, 0, 0.215), (0.012, 0.075, 0.014), "sut_mavi")
+    hw, hd, hb = 0.0375, 0.0375, 0.17
+    P.label_box((0, 0, hb / 2), (hw * 2, hd * 2, hb), {"-y": ("etiket", "sut_on"), "+y": ("etiket", "sut_on"),
+                                                         "+x": ("etiket", "sut_yan"), "-x": ("etiket", "sut_yan"),
+                                                         "-z": ("sut_tepe", None), "+z": ("sut_tepe", None)})
+    for sy in (-1, 1):
+        P.poly([(-hw, sy * hd, hb), (hw, sy * hd, hb), (hw, 0.0, hb + 0.04), (-hw, 0.0, hb + 0.04)][::(1 if sy < 0 else -1)], "sut_tepe")
+    for sx in (-1, 1):
+        P.poly([(sx * hw, -hd, hb), (sx * hw, hd, hb), (sx * hw, 0.0, hb + 0.04)][::(1 if sx > 0 else -1)], "sut_mavi")
+    P.box((0, 0, hb + 0.046), (hw * 2 + 0.002, 0.006, 0.014), "sut_tepe")
     out.append(P.build())
-    # Mısır gevreği kutusu
+
+    # --- Mısır gevreği kutusu: önde kase resmi ve logo, yanlarda besin tablosu ---
     P = product("gevrek")
-    P.box((0, 0, 0.14), (0.2, 0.07, 0.28), "gevrek")
-    P.box((0, 0, 0.255), (0.202, 0.072, 0.05), "gevrek_b")
-    P.cyl((0, -0.036, 0.11), 0.06, 0.004, "beyaz", seg=12, axis="y")
-    P.cyl((0, -0.04, 0.11), 0.045, 0.004, "gevrek_c", seg=12, axis="y")
+    P.label_box((0, 0, 0.14), (0.2, 0.07, 0.28), {"-y": ("etiket", "gevrek_on"), "+y": ("etiket", "gevrek_yan"),
+                                                   "+x": ("etiket", ("gevrek_yan", (0.0, 0.0, 0.4, 1.0))),
+                                                   "-x": ("etiket", ("gevrek_yan", (0.6, 0.0, 1.0, 1.0))),
+                                                   "+z": ("gevrek_kenar", None), "-z": ("gevrek_kenar", None)})
     out.append(P.build())
-    # Cips paketi (yastık biçimi)
+
+    # --- Cips paketi: şişkin yastık, üstte ve altta dişli kıvrık kenar ---
     P = product("cips")
-    prof = [(-0.08, 0.0), (0.08, 0.0), (0.085, 0.12), (0.08, 0.24), (-0.08, 0.24), (-0.085, 0.12)]
-    for (y0, y1, m) in ((-0.035, 0.035, "cips"),):
-        P.prism(prof, y0, y1, m)
-    P.box((0, 0, 0.237), (0.16, 0.05, 0.02), "cips_b")
-    P.box((0, 0, 0.005), (0.16, 0.05, 0.02), "cips_b")
-    P.cyl((0, -0.036, 0.12), 0.04, 0.003, "altin", seg=10, axis="y")
+    W, H, T = 0.16, 0.24, 0.036
+    nx, nz = 6, 6
+    crimp = 0.022
+
+    def bulge(x, z):
+        u = (x / (W / 2)) ** 2
+        v = ((z - H / 2) / (H / 2 - crimp)) ** 2
+        return T * max(0.0, 1.0 - u ** 2) ** 0.5 * max(0.0, 1.0 - v ** 3) ** 0.5 + 0.002
+
+    for side in (-1, 1):
+        grid = []
+        for jz in range(nz + 1):
+            z = crimp + (H - 2 * crimp) * jz / nz
+            row = []
+            for ix in range(nx + 1):
+                x = -W / 2 + W * ix / nx
+                row.append(Vector((x, side * bulge(x * 0.98, z), z)))
+            grid.append(row)
+        for jz in range(nz):
+            for ix in range(nx):
+                pts = [grid[jz][ix], grid[jz][ix + 1], grid[jz + 1][ix + 1], grid[jz + 1][ix]]
+                if side > 0:
+                    pts = [pts[1], pts[0], pts[3], pts[2]]
+                    P._faces(pts, [(0, 1, 2, 3)], "cips_folyo")
+                else:
+                    u0, u1 = ix / nx, (ix + 1) / nx
+                    v0, v1 = jz / nz, (jz + 1) / nz
+                    P._faces(pts, [(0, 1, 2, 3)], "etiket",
+                             [cell_uv("cips_on", u0, v0), cell_uv("cips_on", u1, v0), cell_uv("cips_on", u1, v1), cell_uv("cips_on", u0, v1)])
+    # Yan kenarlar (ince)
+    for sx in (-1, 1):
+        P.box((sx * W / 2, 0, H / 2), (0.004, 0.006, H - 2 * crimp), "cips_folyo")
+    # Kıvrık kenarlar: düz şerit ve dişler
+    for zc in (crimp / 2, H - crimp / 2):
+        P.box((0, 0, zc), (W, 0.006, crimp), "cips_b")
+        for k in range(10):
+            x = -W / 2 + W * (k + 0.5) / 10
+            P.box((x, 0, zc + (crimp / 2 if zc > H / 2 else -crimp / 2)), (0.008, 0.004, 0.004), "cips_b")
     out.append(P.build())
-    # Çikolata (yatık)
+
+    # --- Çikolata: yatık tablet, üstte ambalaj, uçlarda kıvrık yaldız ---
     P = product("cikolata")
-    P.box((0, 0, 0.012), (0.18, 0.075, 0.024), "cikolata")
-    for s in (-1, 1):
-        P.box((s * 0.08, 0, 0.012), (0.022, 0.077, 0.026), "altin")
+    L, Wd, Ht = 0.15, 0.075, 0.022
+    P.label_box((0, 0, Ht / 2), (L, Wd, Ht), {"+z": ("etiket", ("cikolata", (0.14, 0.0, 0.86, 1.0))),
+                                              "-y": ("cikolata", None), "+y": ("cikolata", None), "*": ("cikolata", None)})
+    for sx in (-1, 1):
+        P.box((sx * (L / 2 + 0.012), 0, Ht / 2), (0.024, Wd + 0.004, Ht * 0.7), "altin")
+        P.box((sx * (L / 2 + 0.026), 0, Ht / 2), (0.006, Wd + 0.008, Ht * 0.25), "altin")
     out.append(P.build())
-    # Bal kavanozu
+
+    # --- Bal kavanozu: altıgen amber cam, saran etiket, altın kapak ve kırmızı bez ---
     P = product("bal")
-    P.cyl((0, 0, 0), 0.045, 0.1, "bal", seg=10)
-    P.cyl((0, 0, 0.035), 0.0455, 0.035, "beyaz", seg=10, cap=False)
-    P.cyl((0, 0, 0.1), 0.04, 0.025, "altin", seg=10)
+    P.lathe([(0.042, 0.0), (0.046, 0.008)], "bal_cam", seg=8, cap_bot="bal_cam")
+    P.lathe([(0.046, 0.008), (0.046, 0.085)], "bal_cam", seg=8, label="bal", band=(0.008, 0.085))
+    P.lathe([(0.046, 0.085), (0.04, 0.095), (0.036, 0.1)], "bal_cam", seg=8)
+    P.lathe([(0.04, 0.1), (0.04, 0.115), (0.034, 0.12)], "altin", seg=12, cap_top="altin", cap_bot="altin")
+    P.lathe([(0.05, 0.1), (0.043, 0.122), (0.02, 0.128), (0.0, 0.129)], "bez_kirmizi", seg=10)
+    P.lathe([(0.0415, 0.103), (0.0415, 0.108)], "beyaz", seg=12)
     out.append(P.build())
-    # Ekmek
+
+    # --- Ekmek: yuvarlak uçlu somun, üstte çizik yarıklar, alt koyu ---
     P = product("ekmek")
-    prof = [(-0.05, 0.0), (0.05, 0.0), (0.058, 0.04), (0.04, 0.085), (0.0, 0.1), (-0.04, 0.085), (-0.058, 0.04)]
-    P.prism(prof, -0.13, 0.13, "ekmek", cap_m="ekmek_ust")
-    for k in range(3):
-        P.box((0, -0.08 + k * 0.08, 0.098), (0.06, 0.02, 0.01), "ekmek_ust", rot=30)
+    prof = [(-0.05, 0.0), (0.05, 0.0), (0.058, 0.025), (0.055, 0.055), (0.042, 0.08), (0.022, 0.095), (0.0, 0.1),
+            (-0.022, 0.095), (-0.042, 0.08), (-0.055, 0.055), (-0.058, 0.025)]
+    secs = 10
+    L = 0.13
+    rings = []
+    for k in range(secs + 1):
+        y = -L + 2 * L * k / secs
+        f = max(0.0, 1.0 - (abs(y) / (L + 0.006)) ** 4) ** 0.5
+        rings.append([Vector((y, x * f, z * (0.35 + 0.65 * f))) for (x, z) in prof])
+    n = len(prof)
+    for k in range(secs):
+        for p in range(n):
+            q = (p + 1) % n
+            m = "ekmek_alt" if p == 0 else ("ekmek_ust" if 3 <= p <= 7 else "ekmek")
+            P._faces([rings[k][p], rings[k][q], rings[k + 1][q], rings[k + 1][p]], [(0, 1, 2, 3)], m)
+    P._faces(rings[0], [tuple(range(n))], "ekmek")
+    P._faces(rings[-1], [tuple(reversed(range(n)))], "ekmek")
+    for k in range(4):
+        x = -0.075 + k * 0.05
+        P.box((x, 0, 0.097), (0.012, 0.07, 0.008), "ekmek_acik", rot=25)
     out.append(P.build())
-    # Elma
+
+    # --- Elma: yukarıda çukur, altta yuvarlak; sap ve yaprak; bir yanı açık kırmızı ---
     P = product("elma")
-    P.sphere((0, 0, 0.042), 0.045, "elma", seg=8, rings=6, sz=0.9)
-    P.cyl((0, 0, 0.078), 0.004, 0.022, "sap", seg=4)
-    P.box((0.012, 0, 0.095), (0.025, 0.012, 0.004), "yaprak", rot=30)
+    prof = [(0.0, 0.004), (0.02, 0.0), (0.036, 0.008), (0.046, 0.025), (0.049, 0.045), (0.045, 0.065), (0.033, 0.08),
+            (0.016, 0.083), (0.006, 0.076), (0.0, 0.072)]
+    P.lathe(prof, "elma", seg=12)
+    P.box((0.002, 0, 0.085), (0.005, 0.005, 0.024), "sap", rot=0)
+    P.poly([(0.004, 0.0, 0.092), (0.022, -0.006, 0.098), (0.034, 0.0, 0.094), (0.02, 0.006, 0.088)], "yaprak")
+    P.poly([(0.02, 0.006, 0.088), (0.034, 0.0, 0.094), (0.022, -0.006, 0.098), (0.004, 0.0, 0.092)], "yaprak")
     out.append(P.build())
-    # Kurabiye paketi (yatık tüp)
+
+    # --- Kurabiye kutusu: önde kurabiye resmi ---
     P = product("kurabiye")
-    P.cyl((-0.09, 0, 0.04), 0.04, 0.18, "kurabiye", seg=10, axis="x")
-    P.cyl((-0.095, 0, 0.04), 0.041, 0.02, "kurabiye_b", seg=10, axis="x")
-    P.cyl((0.075, 0, 0.04), 0.041, 0.02, "kurabiye_b", seg=10, axis="x")
+    P.label_box((0, 0, 0.055), (0.17, 0.05, 0.11), {"-y": ("etiket", "kurabiye"), "+y": ("etiket", "kurabiye"),
+                                                    "*": ("kurabiye_kutu", None)})
     out.append(P.build())
-    # Diş macunu kutusu (yatık)
+
+    # --- Diş macunu tüpü: yatık; bir ucu düz kıvrık, öbür ucunda omuz ve mavi kapak ---
     P = product("macun")
-    P.box((0, 0, 0.02), (0.19, 0.045, 0.04), "beyaz")
-    P.box((-0.03, 0, 0.02), (0.08, 0.047, 0.042), "macun")
-    P.box((0.06, 0, 0.02), (0.02, 0.047, 0.042), "tus_kirmizi")
+    L = 0.17
+    n_s = 8
+    secs = 12
+    rings = []
+    for k in range(secs + 1):
+        t = k / secs                       # 0 kıvrık uç, 1 omuz
+        x = -L / 2 + L * t
+        flat = max(0.0, 1.0 - t * 1.6)     # kıvrık uçta yassı
+        r = 0.024 * (0.85 + 0.15 * min(t * 3, 1.0))
+        ring = []
+        for p in range(n_s + 1):
+            a = math.tau * p / n_s - math.pi / 2
+            ry = r * (1.0 + flat * 0.6)
+            rz = r * (1.0 - flat * 0.92)
+            ring.append(Vector((x, math.cos(a) * ry, 0.025 + math.sin(a) * rz)))
+        rings.append(ring)
+    for k in range(secs):
+        for p in range(n_s):
+            pts = [rings[k][p], rings[k + 1][p], rings[k + 1][p + 1], rings[k][p + 1]]
+            top = math.sin(math.tau * (p + 0.5) / n_s - math.pi / 2) > -0.2
+            if top:
+                P._faces(pts, [(0, 1, 2, 3)], "etiket",
+                         [cell_uv("macun", k / secs, p / n_s), cell_uv("macun", (k + 1) / secs, p / n_s),
+                          cell_uv("macun", (k + 1) / secs, (p + 1) / n_s), cell_uv("macun", k / secs, (p + 1) / n_s)])
+            else:
+                P._faces(pts, [(0, 1, 2, 3)], "macun_govde")
+    P._faces(rings[0][:n_s], [tuple(range(n_s))], "macun_govde")
+    P.box((-L / 2 - 0.006, 0, 0.025), (0.012, 0.062, 0.006), "macun_govde")
+    for k in range(5):
+        P.box((-L / 2 - 0.006, -0.024 + k * 0.012, 0.0285), (0.012, 0.004, 0.001), "macun_kapak")
+    P.cyl((L / 2, 0, 0.025), 0.02, 0.01, "macun_govde", seg=10, r2=0.011, axis="x")
+    P.cyl((L / 2 + 0.01, 0, 0.025), 0.014, 0.024, "macun_kapak", seg=10, axis="x")
     out.append(P.build())
-    # Şampuan
+
+    # --- Şampuan: basık oval şişe, saran etiket, beyaz kapaklı kapak ---
     P = product("sampuan")
-    P.cyl((0, 0, 0), 0.032, 0.17, "sampuan", seg=10)
-    P.cyl((0, 0, 0.06), 0.033, 0.06, "beyaz", seg=10, cap=False)
-    P.cyl((0, 0, 0.17), 0.02, 0.04, "beyaz", seg=8)
+    P.lathe([(0.026, 0.0), (0.034, 0.008)], "sampuan", seg=16, sy=0.6, cap_bot="sampuan")
+    P.lathe([(0.034, 0.008), (0.034, 0.13)], "sampuan", seg=16, sy=0.6, label="sampuan", band=(0.008, 0.13))
+    P.lathe([(0.034, 0.13), (0.03, 0.15), (0.02, 0.162), (0.014, 0.166)], "sampuan", seg=16, sy=0.6)
+    P.lathe([(0.018, 0.166), (0.018, 0.19), (0.014, 0.194)], "sampuan_kapak", seg=12, sy=0.8, cap_top="sampuan_kapak", cap_bot="sampuan_kapak")
+    P.box((0.0, -0.012, 0.192), (0.012, 0.006, 0.006), "sampuan_kapak")
     out.append(P.build())
-    # Konserve
+
+    # --- Konserve: gümüş kenarlı teneke, saran etiket, kapakta halka ---
     P = product("konserve")
-    P.cyl((0, 0, 0), 0.04, 0.09, "gumus", seg=10)
-    P.cyl((0, 0, 0.012), 0.0405, 0.066, "konserve", seg=10, cap=False)
+    P.lathe([(0.038, 0.0), (0.04, 0.004), (0.039, 0.008), (0.04, 0.012)], "gumus", seg=16, cap_bot="gumus")
+    P.lathe([(0.0405, 0.012), (0.0405, 0.078)], "gumus", seg=16, label="konserve", band=(0.012, 0.078))
+    P.lathe([(0.04, 0.078), (0.039, 0.082), (0.04, 0.086), (0.038, 0.09)], "gumus", seg=16, cap_top="kola_ust")
+    P.lathe([(0.014, 0.0905), (0.018, 0.0905), (0.018, 0.093), (0.014, 0.093)], "metal_koyu", seg=10, c=(0.0, -0.012, 0.0))
     out.append(P.build())
-    # Yumurta kolisi
+
+    # --- Yumurta kolisi: altı gözlü karton, altı yumurta, arkaya açılmış kapak (içinde etiket) ---
     P = product("yumurta")
-    P.box((0, 0, 0.025), (0.16, 0.1, 0.05), "yumurta")
+    W, Dp, Hb = 0.16, 0.1, 0.035
+    P.label_box((0, 0, Hb / 2), (W, Dp, Hb), {"*": ("karton", None), "+z": ("karton_koyu", None)})
     for i in range(3):
         for j in range(2):
-            P.sphere((-0.05 + i * 0.05, -0.025 + j * 0.05, 0.055), 0.02, "yumurta_b", seg=6, rings=4, sz=1.2)
+            x, y = -0.05 + i * 0.05, -0.025 + j * 0.05
+            P.lathe([(0.0, 0.0), (0.012, 0.004), (0.019, 0.016), (0.02, 0.028), (0.017, 0.042), (0.01, 0.052), (0.0, 0.056)],
+                    "yumurta_kabuk" if (i + j) % 2 == 0 else "yumurta_beyaz", seg=8, c=(x, y, Hb - 0.012))
+    # Kapak: arka kenardan menteşeli, 70° açık; iç yüzünde etiket
+    ang = math.radians(70.0)
+    hy = Dp / 2
+    pts_in = []
+    for (x, d) in ((-W / 2, 0.0), (W / 2, 0.0), (W / 2, Dp), (-W / 2, Dp)):
+        pts_in.append((x, hy + d * math.cos(math.pi - ang), Hb + d * math.sin(math.pi - ang)))
+    P.quad_uv([pts_in[1], pts_in[0], pts_in[3], pts_in[2]], "etiket", "yumurta_kapak", (1.0, 0.0, 0.0, 1.0))
+    P._faces([Vector(p) + Vector((0, 0.004, 0.0)) for p in pts_in], [(0, 1, 2, 3)], "karton")
     out.append(P.build())
     return out
 
@@ -683,7 +892,7 @@ def preview(objs, path_dir):
     scene.render.resolution_x, scene.render.resolution_y = 1280, 800
     sh = scene.display.shading
     sh.light = 'STUDIO'
-    sh.color_type = 'MATERIAL'
+    sh.color_type = 'TEXTURE'
     sh.show_object_outline = True
     if scene.world is None:
         scene.world = bpy.data.worlds.new("World")
@@ -727,8 +936,12 @@ def preview(objs, path_dir):
     x = 0.0
     for ob in prods:
         ob.location = (x, 40, 0)
-        x += 0.3
-    shot("urunler", (x / 2, 40 - 4.6, 1.2), (x / 2, 40, 0.08), lens=35, only=prods)
+        x += 0.25
+    shot("urunler", (x / 2, 40 - 2.4, 0.75), (x / 2, 40, 0.08), lens=35, only=prods)
+    for ob in prods:
+        c = ob.location
+        h = max(ob.dimensions.z, 0.08)
+        shot("u_" + ob.name, (c.x + 0.25, c.y - 0.42, h * 0.9 + 0.14), (c.x, c.y, h * 0.45), lens=50, only=[ob])
     for ob in prods:
         ob.location = (0, 0, 0)
     cam_d.type = 'PERSP'

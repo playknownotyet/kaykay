@@ -49,6 +49,20 @@ var benches: Banklar                  # NPC'ler ara sıra banka oturur
 @export var bench_chance := 0.2
 @export var sit_time := Vector2(10.0, 30.0)
 
+@export_group("Çocuklar")
+## Sokakta doğan NPC'nin elinden tuttuğu çocukla doğma olasılığı: uzakta family_far, parkın
+## yanında family_near (park_reach metrede uzaktakine iner)
+@export var family_far := 0.08
+@export var family_near := 0.45
+@export var park_reach := 170.0
+## Park: oyuncu bu kadar yakınken parkta oynayan çocuklar ve banklarda oturanlar kurulur
+@export var park_on := 90.0
+@export var park_off := 130.0
+@export var park_kids := 6
+@export var park_adults := 3
+var _parks := {}                      # park kimliği -> {"kids": [Npc], "adults": [Npc], "t": zaman}
+var _park_t := 0.0
+
 var _astar := AStar3D.new()
 var _points: Array[Vector3] = []
 var _npcs: Array[Npc] = []
@@ -84,6 +98,8 @@ func respawn() -> void:
 	if _points.is_empty():
 		return
 	for i in count:
+		if _npcs.size() >= count:
+			break
 		_spawn()
 	if look and look.has_method("add_root"):
 		look.add_root(self)
@@ -175,7 +191,7 @@ func _random_point() -> int:
 func _new_destination(n: Npc) -> void:
 	_leave_bench(n)
 	var from := _astar.get_closest_point(n.global_position)
-	if benches and n.can_sit(Banklar.SEAT_Y) and _rng.randf() < bench_chance and _go_to_bench(n, from):
+	if benches and n.kid == null and n.can_sit(Banklar.SEAT_Y) and _rng.randf() < bench_chance and _go_to_bench(n, from):
 		return
 	for attempt in 10:
 		# Büyük adada hedef yakın olsun (30-140 m): yürüyüş oyuncunun çevresinde kalır
@@ -261,10 +277,81 @@ func _spawn() -> void:
 		sp = player.global_position + Vector3(0, -300, 0) if player else _points[_random_point()]
 	n.global_position = sp
 	_npcs.append(n)
+	# Çocuklu aile (parka yakınsa daha olası): aynı türden çocuk ebeveyninin sağında, el ele
+	if _npcs.size() < count and _rng.randf() < family_chance(sp):
+		_add_kid(n)
 	if _rng.randf() < 0.3:
 		n.idle_for(_rng.randf_range(0.5, 4.0))
 	else:
 		_new_destination(n)
+
+
+## Bu noktada çocuklu aile olasılığı: parka yaklaştıkça artar
+func family_chance(p: Vector3) -> float:
+	var d := park_distance(p)
+	var k := 1.0 - clampf((d - 25.0) / park_reach, 0.0, 1.0)
+	return lerpf(family_far, family_near, k)
+
+
+## En yakın parkın uzaklığı (çocuk parkları ve büyük yeşil alanlar)
+func park_distance(p: Vector3) -> float:
+	var best := INF
+	if Sehir.instance:
+		for pk in Sehir.instance.parks:
+			var c: Vector3 = (pk.xf as Transform3D).origin
+			best = minf(best, Vector2(p.x - c.x, p.z - c.z).length())
+	return best
+
+
+func _add_kid(par: Npc) -> Npc:
+	var recipe := NpcCatalog.make_recipe(_rng, String(par.recipe.species))
+	var k := Npc.new()
+	if player:
+		k.ground_exclude = [player.get_rid()]
+	add_child(k)
+	k.setup(recipe, _materials, true)
+	var yaw := par.rotation.y
+	k.global_position = par.global_position + Vector3(cos(yaw), 0, -sin(yaw)) * 0.5
+	k.parent = par
+	par.kid = k
+	par.speed = minf(par.speed, 1.0)
+	par.add_hand("R")
+	k.add_hand("L")
+	_npcs.append(k)
+	return k
+
+
+## Elinden tutulan çocuk: ebeveyninin sağında yürür; iki el ortada buluşur
+func _follow_parent(k: Npc, delta: float) -> void:
+	var par := k.parent
+	var yaw := par.rotation.y
+	var right := Vector3(cos(yaw), 0, -sin(yaw))
+	var fwd := Vector3(-sin(yaw), 0, -cos(yaw))
+	var target := par.global_position + right * 0.5
+	var to := target - k.global_position
+	to.y = 0.0
+	var steer := Vector3.ZERO
+	if to.length() > 0.08:
+		steer = to.normalized() * minf(to.length() * 4.0, maxf(par.speed, 0.6) * 1.8)
+	if k.state == Npc.State.STUMBLE:
+		steer = Vector3.ZERO
+	k.move(delta, steer)
+	if to.length() < 0.3 and par.velocity.length() < 0.2:
+		k.rotation.y = lerp_angle(k.rotation.y, yaw, 1.0 - exp(-6.0 * delta))
+	k.set_far(par.far)
+	# El ele: yakınken ve ikisi de ayaktayken
+	var ok := not k.far and to.length() < 0.6 and not par.is_busy() and not k.is_busy()
+	var w := 1.0 if ok else 0.0
+	if par.hand and k.hand:
+		par.hand.weight = move_toward(par.hand.weight, w, delta * 4.0)
+		k.hand.weight = par.hand.weight
+		if par.hand.weight > 0.0:
+			var a := par.hand.shoulder_world()
+			var b := k.hand.shoulder_world()
+			var m := (a + b) * 0.5 + fwd * 0.1
+			m.y = b.y + 0.06
+			par.hand.target = m
+			k.hand.target = m
 
 
 # ---------- Her kare ----------
@@ -276,8 +363,14 @@ func _physics_process(delta: float) -> void:
 	var cam_pos := camera.global_position if camera else ppos
 	var riding := player != null and not player.on_foot and player.board_anim == SkateController.BoardAnim.NONE
 
+	_park_step(delta, ppos, cam_pos, riding)
 	for i in _npcs.size():
 		var n := _npcs[i]
+		if n.parent:
+			if is_instance_valid(n.parent):
+				_follow_parent(n, delta)
+				continue
+			n.parent = null
 		# Durum geçişleri
 		if n.stumble_done():
 			_new_destination(n)
@@ -316,7 +409,7 @@ func _physics_process(delta: float) -> void:
 		if steer != Vector3.ZERO:
 			var sep := Vector3.ZERO
 			for j in _npcs.size():
-				if i == j:
+				if i == j or _npcs[j] == n.kid:
 					continue
 				var d := n.global_position - _npcs[j].global_position
 				d.y = 0.0
@@ -347,6 +440,8 @@ func _physics_process(delta: float) -> void:
 			var sp := _spawn_point()
 			if sp != Vector3.INF:
 				n.global_position = sp
+				if n.kid and is_instance_valid(n.kid):
+					n.kid.global_position = sp + Vector3(0.5, 0, 0)
 			_new_destination(n)
 
 
@@ -397,3 +492,269 @@ func npc_list() -> Array[Npc]:
 
 static func _edge_key(a: int, b: int) -> Vector2i:
 	return Vector2i(mini(a, b), maxi(a, b))
+
+
+# ---------- Çocuk parkı: oynayan çocuklar, banklarda oturan yetişkinler ----------
+
+## Oyuncu parka yaklaşınca kurulur, uzaklaşınca kaldırılır (görünür mesafenin dışında)
+func _park_step(delta: float, ppos: Vector3, cam_pos: Vector3, riding: bool) -> void:
+	if Sehir.instance == null:
+		return
+	_park_t -= delta
+	var parks: Array = Sehir.instance.parks
+	if _park_t <= 0.0:
+		_park_t = 0.5
+		var alive := {}
+		for pk in parks:
+			var id := int(pk.id)
+			alive[id] = true
+			var c: Vector3 = (pk.xf as Transform3D).origin
+			var d := Vector2(ppos.x - c.x, ppos.z - c.z).length()
+			if d < park_on and not _parks.has(id):
+				_parks[id] = _open_park(pk)
+			elif d > park_off and _parks.has(id):
+				_close_park(id)
+		for id in _parks.keys():
+			if not alive.has(id):
+				_close_park(id)
+	for pk in parks:
+		var id := int(pk.id)
+		if not _parks.has(id):
+			continue
+		var st: Dictionary = _parks[id]
+		st.t += delta
+		var t: float = st.t
+		# Salıncaklar ve tahterevalli: üstünde çocuk varsa hareket eder
+		var swings: Array = pk.swings
+		for si in swings.size():
+			var sw: Dictionary = swings[si]
+			var piv: Node3D = sw.pivot
+			var on := false
+			for k in st.kids:
+				if k.role == "salincak" and int(k.role_data.get("i", -1)) == si:
+					on = true
+			piv.rotation.x = lerpf(piv.rotation.x, sin(t * 2.2 + si * 1.3) * 0.55 if on else 0.0, 1.0 - exp(-3.0 * delta))
+		var ss: Dictionary = pk.seesaw
+		var sp_piv: Node3D = ss.get("pivot")
+		var ss_on := 0
+		for k in st.kids:
+			if k.role == "tahterevalli":
+				ss_on += 1
+		if sp_piv:
+			sp_piv.rotation.z = lerpf(sp_piv.rotation.z, sin(t * 1.7) * 0.22 if ss_on >= 2 else 0.0, 1.0 - exp(-3.0 * delta))
+		for k in st.kids:
+			_kid_play(k, pk, st, delta)
+			k.set_far(k.global_position.distance_to(cam_pos) > visible_distance)
+			if riding and absf(player.speed) > bump_speed and not k.is_busy():
+				var hd: Vector3 = k.global_position - ppos
+				if absf(hd.y) < 1.2:
+					hd.y = 0.0
+					if hd.length() < bump_radius + 0.1:
+						k.stumble(ppos)
+						player.stumble(hd)
+		for a in st.adults:
+			a.tick(delta, Vector3.ZERO)
+			a.set_far(a.global_position.distance_to(cam_pos) > visible_distance)
+
+
+func _open_park(pk: Dictionary) -> Dictionary:
+	var st := {"kids": [], "adults": [], "t": 0.0}
+	var roles := ["salincak", "salincak", "tahterevalli", "tahterevalli", "kaydirak", "kos", "kos", "kos"]
+	for i in park_kids:
+		var recipe := NpcCatalog.make_recipe(_rng, NpcCatalog.pick_species(_rng))
+		var k := Npc.new()
+		if player:
+			k.ground_exclude = [player.get_rid()]
+		add_child(k)
+		k.setup(recipe, _materials, true)
+		var spots: Array = pk.spots
+		k.global_position = spots[_rng.randi() % spots.size()]
+		st.kids.append(k)
+		_set_role(k, pk, st, roles[i % roles.size()])
+	# Yetişkinler park banklarında (oturabilenler)
+	var seats: Array = pk.benches.duplicate()
+	seats.shuffle()
+	var placed := 0
+	for id in seats:
+		if placed >= park_adults or benches == null:
+			break
+		if not benches.is_free(id):
+			continue
+		for attempt in 4:
+			var recipe := NpcCatalog.make_recipe(_rng, NpcCatalog.pick_species(_rng))
+			var a := Npc.new()
+			add_child(a)
+			a.setup(recipe, _materials)
+			if not a.can_sit(Banklar.SEAT_Y):
+				a.queue_free()
+				continue
+			benches.reserve(id, a)
+			a.bench_seat = id
+			a.sit_at(benches.seat_point(id), benches.facing(id), 1e6)
+			st.adults.append(a)
+			placed += 1
+			break
+	if look and look.has_method("add_root"):
+		look.add_root(self)
+	return st
+
+
+func _close_park(id: int) -> void:
+	var st: Dictionary = _parks[id]
+	for k in st.kids:
+		if is_instance_valid(k):
+			k.queue_free()
+	for a in st.adults:
+		if is_instance_valid(a):
+			if benches and a.bench_seat >= 0:
+				benches.release(a.bench_seat, a)
+			a.queue_free()
+	_parks.erase(id)
+
+
+## Çocuğa iş ver: salıncak / tahterevalli yeri boşsa onu alır, yoksa koşar
+func _set_role(k: Npc, pk: Dictionary, st: Dictionary, want: String) -> void:
+	k.stand_up()
+	k.role_t = 0.0
+	k.role_data = {}
+	if want == "salincak":
+		for si in (pk.swings as Array).size():
+			var used := false
+			for o in st.kids:
+				if o != k and o.role == "salincak" and int(o.role_data.get("i", -1)) == si:
+					used = true
+			if not used:
+				k.role = "salincak"
+				k.role_data = {"i": si, "phase": 0}
+				return
+		want = "kos"
+	if want == "tahterevalli" and not (pk.seesaw as Dictionary).is_empty():
+		for e in 2:
+			var used := false
+			for o in st.kids:
+				if o != k and o.role == "tahterevalli" and int(o.role_data.get("i", -1)) == e:
+					used = true
+			if not used:
+				k.role = "tahterevalli"
+				k.role_data = {"i": e, "phase": 0}
+				return
+		want = "kos"
+	if want == "kaydirak" and not (pk.slide as Dictionary).is_empty():
+		k.role = "kaydirak"
+		k.role_data = {"phase": 0}
+		return
+	k.role = "kos"
+	k.role_data = {"to": (pk.spots as Array)[_rng.randi() % (pk.spots as Array).size()]}
+
+
+## Oyun: önce yere yürür / koşar, oturur, sallanır, kayar...
+func _kid_play(k: Npc, pk: Dictionary, st: Dictionary, delta: float) -> void:
+	k.role_t += delta
+	var run := 2.1 * Npc.CHILD_SCALE + 0.9
+	match k.role:
+		"kos":
+			var to: Vector3 = k.role_data.get("to", k.global_position)
+			var d := to - k.global_position
+			d.y = 0.0
+			if k.state == Npc.State.STUMBLE:
+				k.move(delta, Vector3.ZERO)
+			elif d.length() > 0.4 and not k.hopping():
+				k.move(delta, _kid_sep(k, st, d.normalized() * run))
+			else:
+				k.move(delta, Vector3.ZERO)
+				if not k.hopping():
+					var r := _rng.randf()
+					if r < 0.35:
+						k.hop(0.22 + _rng.randf() * 0.1, 0.42)
+					elif r < 0.7 or k.role_t > 18.0:
+						# Başka bir oyuna geç (boş eşya varsa)
+						_set_role(k, pk, st, ["salincak", "tahterevalli", "kaydirak", "kos"][_rng.randi() % 4])
+					else:
+						k.role_data["to"] = (pk.spots as Array)[_rng.randi() % (pk.spots as Array).size()]
+		"salincak":
+			var sw: Dictionary = (pk.swings as Array)[int(k.role_data.i)]
+			var piv: Node3D = sw.pivot
+			var seat: Vector3 = piv.global_transform * (sw.seat as Vector3)
+			if int(k.role_data.phase) == 0:
+				# Salıncağın önüne yürü
+				var front := seat + (pk.xf as Transform3D).basis.z * 0.0
+				var d := front - k.global_position
+				d.y = 0.0
+				if d.length() > 0.35 and k.role_t < 8.0:
+					k.move(delta, _kid_sep(k, st, d.normalized() * run))
+					return
+				k.role_data.phase = 1
+				k.role_t = 0.0
+			var facing: Vector3 = (pk.xf as Transform3D).basis.z
+			k.place_sit(seat, facing)
+			k.move(delta, Vector3.ZERO)
+			if k.role_t > 14.0 + _rng.randf() * 4.0:
+				_set_role(k, pk, st, "kos")
+		"tahterevalli":
+			var ss: Dictionary = pk.seesaw
+			var piv: Node3D = ss.pivot
+			var end: Vector3 = piv.global_transform * ((ss.ends as Array)[int(k.role_data.i)] as Vector3)
+			if int(k.role_data.phase) == 0:
+				var d := end - k.global_position
+				d.y = 0.0
+				if d.length() > 0.4 and k.role_t < 8.0:
+					k.move(delta, _kid_sep(k, st, d.normalized() * run))
+					return
+				k.role_data.phase = 1
+				k.role_t = 0.0
+			var to_c: Vector3 = piv.global_position - end
+			to_c.y = 0.0
+			k.place_sit(end, to_c.normalized())
+			k.move(delta, Vector3.ZERO)
+			if k.role_t > 16.0 + _rng.randf() * 4.0:
+				_set_role(k, pk, st, "kos")
+		"kaydirak":
+			var sl: Dictionary = pk.slide
+			var ph := int(k.role_data.phase)
+			if ph == 0:
+				var d: Vector3 = (sl.bottom as Vector3) - k.global_position
+				d.y = 0.0
+				if d.length() > 0.35 and k.role_t < 10.0:
+					k.move(delta, _kid_sep(k, st, d.normalized() * run))
+					return
+				k.role_data.phase = 1
+				k.role_t = 0.0
+			elif ph == 1:
+				# Merdivenden çıkış
+				var u := clampf(k.role_t / 1.3, 0.0, 1.0)
+				k.global_position = (sl.bottom as Vector3).lerp(sl.top, u)
+				k.velocity = ((sl.top as Vector3) - (sl.bottom as Vector3)) / 1.3
+				var dd: Vector3 = (sl.top as Vector3) - (sl.bottom as Vector3)
+				k.rotation.y = atan2(-dd.x, -dd.z)
+				if u >= 1.0:
+					k.role_data.phase = 2
+					k.role_t = 0.0
+			elif ph == 2:
+				# Oturup kay
+				var u := clampf(k.role_t / 0.9, 0.0, 1.0)
+				k.place_sit((sl.start as Vector3).lerp(sl.end, u * u), sl.dir)
+				k.move(delta, Vector3.ZERO)
+				if u >= 1.0:
+					k.stand_up()
+					k.role_data.phase = 3
+					k.role_t = 0.0
+			else:
+				# İnip biraz uzaklaş, sonra yine kay ya da başka oyun
+				k.move(delta, (sl.dir as Vector3) * run * (1.0 if k.role_t < 0.6 else 0.0))
+				if k.role_t > 1.2:
+					_set_role(k, pk, st, "kaydirak" if _rng.randf() < 0.5 else "kos")
+
+
+## Çocuklar birbirine girmesin
+func _kid_sep(k: Npc, st: Dictionary, steer: Vector3) -> Vector3:
+	var sep := Vector3.ZERO
+	for o in st.kids:
+		if o == k:
+			continue
+		var d: Vector3 = k.global_position - o.global_position
+		d.y = 0.0
+		var dist := d.length()
+		if dist < 0.6 and dist > 0.001:
+			sep += d / dist * (0.6 - dist) * 2.5
+	return (steer + sep).limit_length(steer.length() * 1.2 + 0.2)
+

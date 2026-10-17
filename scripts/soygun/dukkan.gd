@@ -21,6 +21,12 @@ extends Node3D
 ##     kaldırır ve dükkândan dışarı atar; çocuk kalkar, oyun sürer. Dükkândan aldıkları geri alınır.
 ##
 ## Yerel düzen: köken kapı ortası (zemin), -Z dükkanın içi, +X sağ (içeri bakınca).
+##
+## İki biçim (scripts/soygun/ic_mekan.gd geçişi yönetir):
+##   - Dış (ic = false, şehirde): yalnız kabuk, tabela, vitrinden görünen sabit raflar, otomatik
+##     kapı ve önünde silik giriş konisi. Betik / ışın / ışık / sahibi yok: yanından geçmek bedava.
+##   - İç (ic = true, dünyanın uzağında, girince kurulur): raflar, ürünler, zürafa, kameralar,
+##     liste. Kapının içindeki koniden çıkılır (elde ürün varken çıkılmaz).
 
 enum Faz { NORMAL, KESIF_GIRIS, KESIF, KESIF_CIKIS, YAKALANDI, RAF_GIRIS, RAF, RAF_CIKIS }
 
@@ -32,6 +38,9 @@ const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
 const PROP_SCRIPT := preload("res://scripts/ada/prop_katmani.gd")
 const DOKU_SHADER := preload("res://shaders/doku.gdshader")
 const DOKU_ATLAS := preload("res://assets/sehir/dokular.png")
+## Ürün etiketleri (tools/blender/urun_etiket.py)
+const URUN_SHADER := preload("res://shaders/urun.gdshader")
+const ETIKET := preload("res://assets/dukkan/urun_etiket.png")
 ## Piksel dokulu yüzeyler (şehrin cepheleriyle aynı tarz): malzeme adı -> [karo, karo boyu (m), renk]
 const DOKULU := {
 	"duvar": [0, 1.5, Color.WHITE], "tas": [1, 1.0, Color.WHITE], "tas_koyu": [1, 1.0, Color(0.82, 0.82, 0.82)],
@@ -102,6 +111,8 @@ const PROP_COLLIDE := {
 
 var player: SkateController
 var follow_cam: Camera3D
+## true: iç mekân (girilince kurulur); false: şehirdeki dış yüz
+var ic := false
 ## Ekran arayüzünün ekleneceği düğüm (ana görüntüde; dünya ayrı bir SubViewport'ta çizilir ve
 ## oraya dokunuş gitmez). Verilmezse dükkânın kendisi.
 var ui_parent: Node
@@ -171,6 +182,13 @@ var _sel_t := 0.0
 var _raf_take := -1                    # onaylanan ürün: kamera dönünce ele alınır
 var _raf_btn := {}                     # buton adı -> ekran dikdörtgeni
 
+# Kapı ve giriş / çıkış konisi
+var _doors: Array[Node3D] = []
+var _door_open := 0.0
+var _marker: MeshInstance3D
+var _armed := false                    # koni ancak oyuncu bir kez uzaklaşınca tetiklenir
+static var _marker_shader: Shader
+
 
 func _ready() -> void:
 	_rng.randomize()
@@ -198,8 +216,16 @@ func _ready() -> void:
 	_glb = GLB.instantiate()
 	_build_shell()
 	_build_furniture()
-	_build_outside()
 	_build_products()
+	_build_doors()
+	if not ic:
+		# Dış yüz: kapı kapalı (içeri ancak koniyle, yükleme ekranıyla girilir)
+		_build_outside()
+		_marker = _build_marker(Vector3(0, 0, 1.15))
+		_collide(Vector3(2.0, 2.3, 0.25), Transform3D(Basis(), Vector3(0, 1.15, 0.1)))
+		_armed = true
+		return
+	_marker = _build_marker(Vector3(0, 0, -0.5))
 	_build_owner()
 	_build_cameras()
 	_new_list()
@@ -245,9 +271,14 @@ func _material_for(src: Material) -> Material:
 		var sm := StandardMaterial3D.new()
 		sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		sm.albedo_color = Color(c.r, c.g, c.b, 0.28)
+		sm.albedo_color = Color(c.r, c.g, c.b, 0.28) if not ic else Color(0.86, 0.93, 0.98, 0.9)
 		sm.cull_mode = BaseMaterial3D.CULL_DISABLED
 		m = sm
+	elif key == "etiket":
+		var um := ShaderMaterial.new()
+		um.shader = URUN_SHADER
+		um.set_shader_parameter("atlas", ETIKET)
+		m = um
 	elif DOKULU.has(key):
 		var spec: Array = DOKULU[key]
 		var dm := ShaderMaterial.new()
@@ -355,8 +386,8 @@ func _build_shell() -> void:
 	sign.position = Vector3(0, 3.25, T + 0.13)
 	sign.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	add_child(sign)
-	# İç ışıklar (çatı güneşi keser)
-	for z in [-2.2, -5.6]:
+	# İç ışıklar (çatı güneşi keser): yalnız iç mekânda
+	for z in ([-2.2, -5.6] if ic else []):
 		var l := OmniLight3D.new()
 		l.position = Vector3(0, H - 0.5, z)
 		l.omni_range = 7.5
@@ -370,8 +401,12 @@ func _build_furniture() -> void:
 		var name: String = f[0]
 		var xf := _xf(f[1], f[2])
 		var inst := _instance(name, xf)
-		inst.visibility_range_end = INSIDE_VIS
+		inst.visibility_range_end = INSIDE_VIS if ic else 35.0
 		_furn.append(inst)
+		if not ic:
+			if name == "Buzdolabi":
+				_instance("DolapRaflari", xf).visibility_range_end = 35.0
+			continue
 		if name != "Sepetler":
 			var hull := _outline_node(inst.mesh.get_aabb(), 0.03)
 			hull.visible = false
@@ -785,8 +820,25 @@ func _have(type: String) -> bool:
 
 # ---------- Yapı: zürafa ve kameralar ----------
 
+## Kasiyer: dükkânın adındaki hayvan (PENGUEN MARKET -> penguen); yoksa zürafa
+const KASIYER := {"ZURAFA": "zurafa", "FIL": "fil", "PENGUEN": "penguen", "GUVERCIN": "guvercin", "KEDI": "kedi",
+	"KOPEK": "kopek", "TAVSAN": "tavsan", "SICAN": "sican", "FARE": "sican", "KURBAGA": "kurbaga", "SINEK": "sinek",
+	"PAPAGAN": "papagan", "TILKI": "tilki", "ASLAN": "aslan"}
+
+
+static func cashier_species(shop_name: String) -> String:
+	var n := shop_name.to_upper()
+	for a in [["İ", "I"], ["Ş", "S"], ["Ğ", "G"], ["Ü", "U"], ["Ö", "O"], ["Ç", "C"], ["ı", "I"]]:
+		n = n.replace(a[0], a[1])
+	for word in n.split(" ", false):
+		for k in KASIYER:
+			if word.begins_with(k):
+				return KASIYER[k]
+	return "zurafa"
+
+
 func _build_owner() -> void:
-	var recipe := NpcCatalog.make_recipe(_rng, "zurafa")
+	var recipe := NpcCatalog.make_recipe(_rng, cashier_species(ad))
 	_owner = Node3D.new()
 	_owner.name = "Zurafa"
 	_owner.position = Vector3(3.95, 0, -2.2)
@@ -844,11 +896,13 @@ func _build_cameras() -> void:
 		m.albedo_color = w.color
 		m.render_priority = i + 1
 		m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		m.no_depth_test = true
 		var lm := StandardMaterial3D.new()
 		lm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		lm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		lm.albedo_color = Color(w.color.r, w.color.g, w.color.b, 0.9)
 		lm.render_priority = i + 10
+		lm.no_depth_test = true
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi.visible = false
 		add_child(mi)
@@ -863,20 +917,8 @@ func _build_cameras() -> void:
 func _physics_process(delta: float) -> void:
 	if not player:
 		return
-	# Uzaktaysa uyu (raflar yalnız elde ürün yokken yenilenir; liste bittiyse yenisi)
-	if faz == Faz.NORMAL and _owner_mode == 0 and _take_t < 0.0 and _put_t < 0.0 \
-			and global_position.distance_to(player.global_position) > SLEEP_DIST:
-		if _held_slot < 0:
-			if not _stolen.is_empty():
-				for i in _stolen:
-					_set_slot_visible(i, true)
-				_stolen.clear()
-			if _list_done:
-				_new_list()
-		if _owns_buttons:
-			_set_buttons([])
-		_light_outline(null)
-		_ui.visible = false
+	if not ic:
+		_outside_step(delta)
 		return
 	if _owner_mode == 0:
 		_update_owner(delta)
@@ -885,10 +927,12 @@ func _physics_process(delta: float) -> void:
 	_update_watchers()
 	var lp := to_local(player.global_position)
 	var inside := absf(lp.x) < W * 0.5 - 0.2 and lp.z < -0.3 and lp.z > -D + 0.2 and absf(lp.y) < 2.0
-	var near := absf(lp.x) < W * 0.5 + 6.0 and lp.z < 8.0 and lp.z > -D - 4.0
 
 	match faz:
 		Faz.NORMAL:
+			_door_step(delta, 1.0 if lp.z > -2.6 else 0.0)
+			if _exit_step(lp):
+				return
 			var list := []
 			var free := player.on_foot and player.fall_time <= 0.0 and player.action_time <= 0.0 and not player.bag_open \
 				and not player.sitting and _take_t < 0.0 and _put_t < 0.0
@@ -903,14 +947,6 @@ func _physics_process(delta: float) -> void:
 				list.append({"id": "birak", "icon": "birak"})
 			_set_buttons(list)
 			_step_take(delta)
-			# Dükkândan uzaklaşınca raflar yenilenir (çalınanlar oyuncuda kalır); liste bittiyse yenisi
-			if not near and _held_slot < 0 and _take_t < 0.0:
-				if not _stolen.is_empty():
-					for i in _stolen:
-						_set_slot_visible(i, true)
-					_stolen.clear()
-				if _list_done:
-					_new_list()
 			# Liste tamam mı?
 			if not _list_done and not _wanted.is_empty():
 				var all := true
@@ -983,7 +1019,7 @@ func _physics_process(delta: float) -> void:
 			_caught_step(delta)
 	_banner_t = maxf(_banner_t - delta, 0.0)
 	GuvenliAlan.fit(_ui)
-	_ui.visible = inside or near or faz != Faz.NORMAL
+	_ui.visible = true
 	_ui.queue_redraw()
 
 
@@ -1069,6 +1105,137 @@ func _on_context(id: String) -> void:
 			_set_buttons([])
 
 
+# ---------- Kapı ve giriş / çıkış ----------
+
+## İki kanatlı otomatik cam kapı (kapı boşluğunda; yaklaşınca iki yana kayar)
+func _build_doors() -> void:
+	var frame_mat := ShaderMaterial.new()
+	frame_mat.shader = CHAR_SHADER
+	frame_mat.set_shader_parameter("albedo", Color(0.28, 0.3, 0.33))
+	var glass := StandardMaterial3D.new()
+	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glass.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	glass.albedo_color = Color(0.72, 0.86, 0.95, 0.35) if not ic else Color(0.86, 0.93, 0.98, 0.9)
+	glass.cull_mode = BaseMaterial3D.CULL_DISABLED
+	for sx: float in [-1.0, 1.0]:
+		var panel := Node3D.new()
+		panel.position = Vector3(sx * 0.5, 0, 0.06)
+		add_child(panel)
+		var g := MeshInstance3D.new()
+		var gm := BoxMesh.new()
+		gm.size = Vector3(0.92, 2.14, 0.02)
+		g.mesh = gm
+		g.material_override = glass
+		g.position = Vector3(0, 1.12, 0)
+		g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		panel.add_child(g)
+		var f := MeshInstance3D.new()
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for bar in [[Vector3(0, 2.22, 0), Vector3(1.0, 0.08, 0.05)], [Vector3(0, 0.04, 0), Vector3(1.0, 0.08, 0.05)],
+				[Vector3(-0.48, 1.13, 0), Vector3(0.05, 2.18, 0.05)], [Vector3(0.48, 1.13, 0), Vector3(0.05, 2.18, 0.05)],
+				[Vector3(-sx * 0.38, 1.05, 0.03), Vector3(0.03, 0.4, 0.03)]]:
+			Sehir._box(st, Transform3D.IDENTITY, bar[0], bar[1], Color.WHITE)
+		f.mesh = st.commit()
+		f.material_override = frame_mat
+		panel.add_child(f)
+		_doors.append(panel)
+
+
+func _door_step(delta: float, target: float) -> void:
+	_door_open = move_toward(_door_open, target, delta * 2.6)
+	var k := _door_open * _door_open * (3.0 - 2.0 * _door_open)
+	for i in _doors.size():
+		var sx := -1.0 if i == 0 else 1.0
+		_doors[i].position.x = sx * (0.5 + 0.93 * k)
+
+
+## Giriş / çıkış konisi: yerden yükselen, yukarı doğru silinen saydam ışık (çok belirgin değil)
+func _build_marker(pos: Vector3) -> MeshInstance3D:
+	if _marker_shader == null:
+		_marker_shader = Shader.new()
+		_marker_shader.code = """shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
+uniform vec4 col : source_color = vec4(1.0, 0.86, 0.35, 0.22);
+varying float h;
+void vertex() { h = VERTEX.y / 0.9 + 0.5; }
+void fragment() {
+	float pulse = 0.8 + 0.2 * sin(TIME * 2.6);
+	ALBEDO = col.rgb;
+	ALPHA = col.a * pulse * pow(clamp(1.0 - h, 0.0, 1.0), 1.4);
+}
+"""
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.36
+	cm.bottom_radius = 0.5
+	cm.height = 0.9
+	cm.radial_segments = 16
+	cm.rings = 1
+	cm.cap_top = false
+	cm.cap_bottom = false
+	mi.mesh = cm
+	var m := ShaderMaterial.new()
+	m.shader = _marker_shader
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = pos + Vector3(0, 0.45, 0)
+	mi.visibility_range_end = 40.0
+	add_child(mi)
+	return mi
+
+
+## Dış yüz: yaklaşınca kapı açılır; koniye gelince iç mekâna geçilir
+func _outside_step(delta: float) -> void:
+	var lp := to_local(player.global_position)
+	var near := lp.z > -0.5 and lp.z < 4.5 and absf(lp.x) < 3.5 and absf(lp.y) < 2.0
+	if near or _door_open > 0.0:
+		_door_step(delta, 1.0 if near else 0.0)
+	var on := absf(lp.x) < 0.7 and lp.z > 0.55 and lp.z < 1.6 and absf(lp.y) < 1.2
+	if not on:
+		if lp.z > 2.4 or absf(lp.x) > 1.6 or absf(lp.y) > 1.5:
+			_armed = true
+		return
+	if _armed and absf(player.speed) < 4.5 and IcMekan.instance and not IcMekan.instance.busy:
+		_armed = false
+		IcMekan.instance.enter(self)
+
+
+## İç mekân: kapının içindeki koniye gelince dışarı çıkılır (elde ürün varken çıkılmaz)
+func _exit_step(lp: Vector3) -> bool:
+	var on := absf(lp.x) < 0.8 and lp.z > -0.95 and lp.z < 0.4
+	if not on:
+		if lp.z < -1.7:
+			_armed = true
+		return false
+	if not _armed or IcMekan.instance == null or IcMekan.instance.busy:
+		return false
+	if player.held_item != "" or _held_slot >= 0:
+		_banner = "ÖNCE ELİNDEKİNİ BIRAK YA DA ÇANTANA KOY"
+		_banner_t = 2.2
+		player.global_position = to_global(Vector3(lp.x, lp.y, -1.25))
+		player.velocity = Vector3.ZERO
+		player.speed = 0.0
+		_armed = false
+		return false
+	_armed = false
+	_set_buttons([])
+	_light_outline(null)
+	IcMekan.instance.exit(false)
+	return true
+
+
+## İç mekân silinmeden önce: butonlar, eldeki ürün, kamera
+func leave() -> void:
+	_set_buttons([])
+	_light_outline(null)
+	_free_held()
+	if _cam and _cam.current and follow_cam:
+		follow_cam.make_current()
+	if player:
+		player.held_in_air = false
+
+
 func _start_exit() -> void:
 	faz = Faz.KESIF_CIKIS
 	_t = 0.0
@@ -1116,6 +1283,12 @@ func _caught_step(delta: float) -> void:
 		_fade = 1.0 - (_ct - 1.7) / 0.4
 	else:
 		_fade = 0.0
+	var scr := IcMekan.instance.screen if IcMekan.instance else null
+	if scr and not _released:
+		scr.caught = _fade > 0.0
+		scr.loading = false
+		scr.alpha = _fade
+		scr.visible = _fade > 0.0
 	if _ct >= 0.45 and _ct - delta < 0.45:
 		_setup_caught_scene()
 	var ot := _ct - 1.75                       # sahibinin animasyon zamanı
@@ -1129,7 +1302,10 @@ func _caught_step(delta: float) -> void:
 	if ot >= AT_BIRAK and not _released:
 		_released = true
 		player.held_in_air = false
-		player.knockdown(out * 4.2)
+		if IcMekan.instance:
+			IcMekan.instance.exit(true)        # kapıdan dışarı atıldı: sokağa düşer
+		else:
+			player.knockdown(out * 4.2)
 	# Sahibi işini bitirince tezgâha döner; çocuk kalkınca kamera oyuna geri döner
 	if _released and ot > 2.1 and _owner_mode == 1:
 		_owner_mode = 2
@@ -1183,9 +1359,9 @@ func _setup_caught_scene() -> void:
 	player.velocity = Vector3.ZERO
 	player.speed = 0.0
 	player.reset_physics_interpolation()
-	# Kamera sokakta, kapıya karşıdan bakar
-	var cam_pos := to_global(Vector3(1.3, 1.4, 6.2))
-	var look := to_global(Vector3(0, 1.25, -0.6))
+	# Kamera içeride, kapıya bakar (dış dünya iç mekândayken yok)
+	var cam_pos := to_global(Vector3(-1.9, 1.75, -4.6))
+	var look := to_global(Vector3(0, 1.15, -0.6))
 	_cam.global_transform = Transform3D(Basis.looking_at(look - cam_pos, Vector3.UP), cam_pos)
 	_cam.fov = 48.0
 	_cam.make_current()
@@ -1349,7 +1525,7 @@ func _draw_ui() -> void:
 		var ls := maxf(floorf(px * 0.6), 1.0)
 		var y := size.y - px * 14.0
 		_ui.draw_rect(Rect2(px * 4.0, y, px * 3.0, px * 3.0), Color(1.0, 0.85, 0.2))
-		PixelArt.draw_text(_ui, "ZÜRAFA", Vector2(px * 8.5, y), ls, Color(1, 1, 1, 0.85), shadow)
+		PixelArt.draw_text(_ui, "KASİYER", Vector2(px * 8.5, y), ls, Color(1, 1, 1, 0.85), shadow)
 		_ui.draw_rect(Rect2(px * 4.0, y + px * 5.0, px * 3.0, px * 3.0), Color(1.0, 0.3, 0.25))
 		PixelArt.draw_text(_ui, "KAMERA", Vector2(px * 8.5, y + px * 5.0), ls, Color(1, 1, 1, 0.85), shadow)
 	elif (faz == Faz.NORMAL or faz == Faz.RAF or faz == Faz.RAF_GIRIS) and not _wanted.is_empty():
@@ -1360,17 +1536,11 @@ func _draw_ui() -> void:
 	if _banner_t > 0.0 and _banner != "":
 		var a := clampf(_banner_t / 0.5, 0.0, 1.0)
 		var s := px
+		while s > 1.0 and PixelArt.text_width(_banner, s) > size.x * 0.9:
+			s -= 1.0
 		PixelArt.draw_text(_ui, _banner, Vector2(size.x * 0.5 - PixelArt.text_width(_banner, s) * 0.5, size.y * 0.2), s,
 			Color(1.0, 0.9, 0.4, 0.85 * a), Color(0.08, 0.04, 0.12, 0.6 * a))
-	# Yakalanma: kararma ve yazı
-	if faz == Faz.YAKALANDI and _fade > 0.0:
-		_ui.draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, _fade))
-		if _ct > 0.5 and _ct < 2.0:
-			var txt := "YAKALANDIN!"
-			var s := px * 2.0
-			var a := clampf((_ct - 0.5) / 0.25, 0.0, 1.0) * clampf((2.0 - _ct) / 0.3, 0.0, 1.0)
-			PixelArt.draw_text(_ui, txt, Vector2(size.x * 0.5 - PixelArt.text_width(txt, s) * 0.5, size.y * 0.45), s,
-				Color(1.0, 0.3, 0.25, a), Color(0.2, 0.0, 0.0, a))
+	# Yakalanma kararması ve yazısı tam ekran yükleme ekranında (scripts/soygun/yukleme_ekrani.gd)
 
 
 ## Raf kamerası: başlık, seçilen ürünün adı, "geri bırak" / "onay" ve kapat butonları

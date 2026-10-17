@@ -14,12 +14,12 @@ extends Node
 
 const TOOLS := [
 	["sec", "Seç / taşı"], ["bina", "Bina"], ["dukkan", "Dükkân"], ["yol", "Ara sokak"],
-	["merdiven", "Merdiven"], ["yukselti", "Yükselti"], ["korkuluk", "Korkuluk"], ["yesil", "Yeşil alan"], ["sil", "Sil"],
+	["merdiven", "Merdiven"], ["yukselti", "Yükselti"], ["korkuluk", "Korkuluk"], ["yesil", "Yeşil alan"], ["park", "Çocuk parkı"], ["sil", "Sil"],
 ]
 const COLORS := {
 	"bina": Color(0.6, 0.85, 1.0), "dukkan": Color(1.0, 0.82, 0.3), "yol": Color(0.95, 0.75, 0.55),
 	"merdiven": Color(1.0, 0.55, 0.25), "yukselti": Color(0.55, 1.0, 0.6), "korkuluk": Color(0.85, 0.85, 0.9),
-	"yesil": Color(0.4, 0.9, 0.35),
+	"yesil": Color(0.4, 0.9, 0.35), "park": Color(1.0, 0.5, 0.75),
 }
 
 var sehir: Sehir
@@ -257,6 +257,7 @@ func _update_status() -> void:
 		"yol": "Tıkla tıkla: sokak çiz · Enter / çift tık: bitir · Esc: vazgeç",
 		"merdiven": "Alt uç ve üst ucu tıkla (yükseklikler zeminden)",
 		"yukselti": "Sol tık: yükselti koy / var olanı seç · Mavi çubuk: döndür · Q/E: yön",
+		"park": "Sol tık: çocuk parkı koy (30 x 24 m) / var olanı seç · Mavi çubuk: döndür",
 		"korkuluk": "Tıkla tıkla: korkuluk çiz · Enter / çift tık: bitir",
 		"yesil": "Tıkla tıkla: çim alanın köşeleri · Enter / çift tık: bitir (en az 3 köşe)",
 		"sil": "Sol tık: tıklanan öğeyi sil",
@@ -314,6 +315,8 @@ func _refresh_props() -> void:
 		"merdiven":
 			_num(it, "w", "Genişlik (m)", 1.0, 8.0, 0.1)
 			_check(it, "korkuluk", "Korkuluk (grind)")
+		"park":
+			_num(it, "r", "Yön (derece)", -180.0, 180.0, 0.5)
 		"yukselti":
 			_num(it, "w", "Genişlik (m)", 1.0, 40.0, 0.5)
 			_num(it, "d", "Derinlik (m)", 1.0, 40.0, 0.5)
@@ -641,7 +644,7 @@ func _click(raw: Vector3) -> void:
 				_push_undo()
 				sehir.remove(sehir.data.items[i])
 				_outline_cache.clear()
-		"bina", "dukkan", "yukselti":
+		"bina", "dukkan", "yukselti", "park":
 			# Var olan bir öğeye tıklandıysa yenisini koyma: onu seç (taşı / özelliklerini değiştir)
 			var hit := sehir.item_at(Vector2(raw.x, raw.z))
 			if hit >= 0:
@@ -690,7 +693,7 @@ func _click(raw: Vector3) -> void:
 ## Dikdörtgen öğenin dünyadaki gövdesi: merkez, yön, en, derinlik (dükkânda bina kısmı)
 func _rect(it: Dictionary) -> Dictionary:
 	match String(it.get("t", "")):
-		"bina", "yukselti":
+		"bina", "yukselti", "park":
 			return {"c": Sehir.v2(it.p), "r": float(it.get("r", 0.0)), "w": float(it.w), "d": float(it.d)}
 		"dukkan":
 			var b := sehir.shop_body_outline(it)

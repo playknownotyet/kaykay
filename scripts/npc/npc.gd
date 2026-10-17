@@ -42,6 +42,18 @@ const STEP_UP := 0.45
 ## Bankta: rezerve ettiği yer (Banklar), oturma pozunda kalçanın köke göre yeri
 var bench_seat := -1
 var sit_hip := Vector3.INF
+## Çocuk: yetişkin modelinin küçültülmüşü (baş ve eller büyük, scripts/npc/cocuk_oran.gd)
+const CHILD_SCALE := 0.58
+var child := false
+var parent: Npc = null                # çocuksa elinden tuttuğu ebeveyn
+var kid: Npc = null                   # ebeveynse elinden tuttuğu çocuk
+var hand: ElTut = null                # el ele tutuşan kol
+var role := ""                        # parkta: "kos", "salincak", "kaydirak", "tahterevalli", "bank"
+var role_t := 0.0
+var role_data: Dictionary = {}
+var _hop_t := -1.0                    # yerinde zıplama (sn), _hop_len boyunca
+var _hop_len := 0.45
+var _hop_h := 0.25
 
 var _model: Node3D
 var _anim: AnimationPlayer
@@ -54,11 +66,16 @@ var _ground_snap := true               # görünür olunca zemine bir anda otur
 
 
 ## materials: renk -> paylaşılan malzeme önbelleği (çizim çağrısı ve bellek için)
-func setup(p_recipe: Dictionary, materials: Dictionary) -> void:
+func setup(p_recipe: Dictionary, materials: Dictionary, is_child := false) -> void:
 	recipe = p_recipe
+	child = is_child
 	speed = recipe.speed
 	_anim_speed = recipe.anim_speed
 	_model = build_model(recipe, materials)
+	if child:
+		_model.scale *= CHILD_SCALE
+		_anim_speed *= CHILD_SCALE
+		speed *= 0.85
 	add_child(_model)
 	_anim = _model.find_child("AnimationPlayer", true, false)
 	for n in ["walk", "idle", "idle_look", "otur"]:
@@ -72,6 +89,50 @@ func setup(p_recipe: Dictionary, materials: Dictionary) -> void:
 		_buzz = WingBuzz.new()
 		_buzz.bones = PackedStringArray(recipe.buzz)
 		_model.find_children("*", "Skeleton3D", true, false)[0].add_child(_buzz)
+	if child:
+		_model.find_children("*", "Skeleton3D", true, false)[0].add_child(CocukOran.new())
+
+
+## El ele tutuşacak kol ("L" / "R"): ElTut düzenleyicisi
+func add_hand(side: String) -> ElTut:
+	if hand == null:
+		hand = ElTut.new()
+		hand.side = side
+		_model.find_children("*", "Skeleton3D", true, false)[0].add_child(hand)
+	return hand
+
+
+## Yerinde zıplama (çocuklar parkta)
+func hop(height := 0.25, length := 0.45) -> void:
+	_hop_t = 0.0
+	_hop_h = height
+	_hop_len = length
+
+
+func hopping() -> bool:
+	return _hop_t >= 0.0
+
+
+## Parkta dışarıdan oturtulup taşınan (salıncak, kaydırak, tahterevalli): kalça hip'e gelir
+func place_sit(hip: Vector3, facing: Vector3) -> void:
+	_yaw = atan2(-facing.x, -facing.z)
+	rotation.y = _yaw
+	global_position = hip + Vector3.UP * 0.03 - Basis(Vector3.UP, _yaw) * sit_hip * (1.0 if sit_hip != Vector3.INF else 0.0)
+	velocity = Vector3.ZERO
+	if state != State.SIT:
+		_timer = 1e6
+		_set_state(State.SIT)
+
+
+func stand_up() -> void:
+	if state == State.SIT:
+		_set_state(State.IDLE)
+		_timer = 0.0
+
+
+## Boy (kök yerden başın tepesine yaklaşık; çocukta küçük)
+func size_k() -> float:
+	return CHILD_SCALE if child else 1.0
 
 
 ## Kulak, kuyruk, hortum gibi zincirler: animasyonun üstüne fiziksel yaylanma
@@ -225,6 +286,18 @@ func reached_end() -> bool:
 	return state == State.WALK and path_index >= path.size()
 
 
+## Dışarıdan sürülen hareket (ebeveynini izleyen ya da parkta oynayan çocuk): yön verilince
+## yürür, verilmeyince bekler (yol izleyen NPC'lerin durum makinesi kullanılmaz)
+func move(delta: float, steer: Vector3) -> void:
+	if state != State.STUMBLE and state != State.SIT:
+		var want := State.WALK if steer.length() > 0.05 else State.IDLE
+		if state != want:
+			state = want
+			if want == State.IDLE:
+				_timer = 1e6
+	tick(delta, steer)
+
+
 func tick(delta: float, steer: Vector3) -> void:
 	if state == State.SIT:
 		_timer -= delta
@@ -236,9 +309,16 @@ func tick(delta: float, steer: Vector3) -> void:
 		_timer -= delta
 		velocity = velocity.move_toward(Vector3.ZERO, 6.0 * delta)
 	else:
-		velocity = velocity.move_toward(steer, 4.0 * delta)
+		velocity = velocity.move_toward(steer, (6.0 if child else 4.0) * delta)
 	global_position += velocity * delta
 	_follow_ground(delta)
+	if _hop_t >= 0.0:
+		_hop_t += delta
+		var k := _hop_t / _hop_len
+		if k >= 1.0:
+			_hop_t = -1.0
+		else:
+			global_position.y += 4.0 * _hop_h * k * (1.0 - k)
 
 	var v := Vector3(velocity.x, 0.0, velocity.z)
 	if state != State.STUMBLE and v.length() > 0.15:
@@ -249,33 +329,56 @@ func tick(delta: float, steer: Vector3) -> void:
 		return
 	if state == State.WALK and v.length() > 0.1:
 		_play("walk")
-		_anim.speed_scale = clampf(v.length() / _anim_speed, 0.5, 1.8)
+		_anim.speed_scale = clampf(v.length() / _anim_speed, 0.5, 2.6 if child else 1.8)
 	elif state != State.STUMBLE:
 		_play(_idle_anim)
 		_anim.speed_scale = 1.0
 
 
-## Ayaklar zeminde: görünürken aşağı ışınla gerçek yüzeyi bul (yol noktaları seyrek,
-## aradaki tepe/çukur yüzünden NPC havada ya da yerin altında kalmasın).
-## Uzaktayken (gizli) ucuz yol: sıradaki yol noktasının yüksekliği.
+## Ayaklar zeminde: görünürken yukarıdan aşağı ışınla gerçek yürüme yüzeyini bul. Işın yüksekten
+## başlar: NPC bir şekilde zeminin altına düşmüşse de yüzeyi bulur (dağ yamaçlarında yol
+## noktaları zeminden alçakta kalabiliyordu, kısa ışın zemini göremeyip NPC gömülüyordu).
+## Lamba, tabela, bank gibi şeylerin tepesi yürüme yüzeyi sayılmaz; şehir yüzeyleri (merdiven,
+## yükselti) yalnız bir basamak yukarıdaysa.
 func _follow_ground(delta: float) -> void:
 	if not far:
-		var p := global_position
-		# Görünür olurken yol yüksekliğinden başla (yerin altında kalmış olabilir)
-		var top := p.y
-		if _ground_snap and path_index < path.size():
-			top = maxf(top, path[path_index].y)
-		var q := PhysicsRayQueryParameters3D.create(Vector3(p.x, top + STEP_UP, p.z), p + Vector3.DOWN * 6.0, 0xFFFFFFFF, ground_exclude)
-		var hit := get_world_3d().direct_space_state.intersect_ray(q)
-		if not hit.is_empty() and not (hit.collider is Araba):
-			if _ground_snap:
-				global_position.y = hit.position.y
+		var gy := _ground_y(global_position)
+		if not is_nan(gy):
+			if _ground_snap or global_position.y < gy - 0.3:
+				global_position.y = gy
 				_ground_snap = false
 			else:
-				global_position.y = lerpf(p.y, hit.position.y, 1.0 - exp(-20.0 * delta))
+				global_position.y = lerpf(global_position.y, gy, 1.0 - exp(-20.0 * delta))
 			return
 	if path_index < path.size():
 		global_position.y = lerpf(global_position.y, path[path_index].y, 1.0 - exp(-8.0 * delta))
+
+
+const WALKABLE := ["Kaldirim", "Yol", "Kavsak", "Meydan", "Arazi", "Iskele"]
+
+
+func _ground_y(p: Vector3) -> float:
+	var space := get_world_3d().direct_space_state
+	var excl: Array[RID] = ground_exclude.duplicate()
+	for k in 5:
+		var q := PhysicsRayQueryParameters3D.create(Vector3(p.x, p.y + 30.0, p.z), Vector3(p.x, p.y - 12.0, p.z), 0xFFFFFFFF, excl)
+		var hit := space.intersect_ray(q)
+		if hit.is_empty():
+			return NAN
+		var c: Object = hit.collider
+		var ok := false
+		if not (c is Araba) and c is Node:
+			var nm := String((c as Node).name)
+			for w in WALKABLE:
+				if nm.begins_with(w):
+					ok = true
+					break
+			if not ok and (c as Node).has_meta("surface") and hit.normal.y > 0.7 and hit.position.y < p.y + STEP_UP + 0.1:
+				ok = true
+		if ok:
+			return hit.position.y
+		excl.append(hit.rid)
+	return NAN
 
 
 func stumble_done() -> bool:

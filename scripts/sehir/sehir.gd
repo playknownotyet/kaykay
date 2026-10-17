@@ -57,6 +57,7 @@ const VARSAYILAN := {
 	"yol": {"w": 2.6},
 	"merdiven": {"w": 2.4, "korkuluk": true},
 	"yukselti": {"w": 6.0, "d": 6.0, "h": 1.2, "s": 7, "r": 0.0},
+	"park": {"w": 30.0, "d": 24.0, "r": 0.0},
 	"korkuluk": {"h": 0.9},
 	"yesil": {},
 }
@@ -84,6 +85,8 @@ var _sdet: SurfaceTool               # kurulum sırasında cephe ayrıntıların
 static var _cephe: Dictionary = {}
 ## Gerçek 3D oda kurulabilecek yerler (binaların zemin kat ön cephesi): CanliOdalar okur
 var room_slots: Array = []
+## Çocuk parkları (CocukParki.build): çocukların oynayacağı yerler, salıncaklar, banklar (NpcCrowd okur)
+var parks: Array = []
 var _rooms: CanliOdalar
 ## Gece (0..1): odaların bir kısmının ışığı yanar. Gün döngüsü (henüz yok) bunu değiştirecek.
 var gece := 0.0:
@@ -334,6 +337,23 @@ func _ground_regions() -> Array:
 		var y := _base_y(door)
 		it["_y"] = y
 		regions.append({"k": "foot", "c": c, "ax": ax, "az": az, "hw": hw + 0.3, "hd": hd + 0.3, "y0": y - 0.25, "y1": y - 0.25, "z": false, "rad": 0.0})
+	# Çocuk parkları: düz zemin (ortalama arazi yüksekliği)
+	for it in data.items:
+		if String(it.t) != "park":
+			continue
+		var b := _yaw(it)
+		var c := v2(it.p)
+		var hw := CocukParki.W * 0.5
+		var hd := CocukParki.D * 0.5
+		var acc := 0.0
+		for sx: float in [-0.8, 0.0, 0.8]:
+			for sz: float in [-0.8, 0.0, 0.8]:
+				var q: Vector3 = b * Vector3(sx * hw, 0, sz * hd)
+				acc += _orig_h(c.x + q.x, c.y + q.z)
+		var y := acc / 9.0
+		it["_y"] = y
+		regions.append({"k": "park", "c": c, "ax": Vector2(b.x.x, b.x.z), "az": Vector2(b.z.x, b.z.z), "hw": hw + 0.5, "hd": hd + 0.5,
+			"y0": y, "y1": y, "z": false, "rad": 1.0})
 	# Ara sokaklar: yuvarlak uçlu şeritler; yükseklik arazi, kaldırıma yaklaşınca kaldırım hizası
 	for it in data.items:
 		if String(it.t) != "yol":
@@ -777,11 +797,11 @@ func _in_rect(it: Dictionary, x: float, z: float, pad: float) -> bool:
 func outline(it: Dictionary) -> PackedVector2Array:
 	var out := PackedVector2Array()
 	match String(it.t):
-		"bina", "yukselti":
+		"bina", "yukselti", "park":
 			var c := v2(it.p)
 			var b := _yaw(it)
-			var hw := float(it.w) * 0.5
-			var hd := float(it.d) * 0.5
+			var hw := float(it.get("w", CocukParki.W)) * 0.5
+			var hd := float(it.get("d", CocukParki.D)) * 0.5
 			for s: Vector2 in [Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1), Vector2(-1, -1)]:
 				var p: Vector3 = b * Vector3(s.x * hw, 0, s.y * hd)
 				out.append(c + Vector2(p.x, p.z))
@@ -816,9 +836,9 @@ func item_at(p: Vector2) -> int:
 		var it: Dictionary = data.items[i]
 		var d := INF
 		match String(it.t):
-			"bina", "yukselti":
+			"bina", "yukselti", "park":
 				if _in_rect(it, p.x, p.y, 0.4):
-					d = 0.5 if it.t == "bina" else 1.0
+					d = 0.5 if it.t == "bina" else (1.5 if it.t == "park" else 1.0)
 			"dukkan":
 				var ol := outline(it)
 				if Geometry2D.is_point_in_polygon(p, ol.slice(0, 4)):
@@ -892,6 +912,10 @@ func rebuild() -> void:
 	_built.name = "Yapilar"
 	add_child(_built)
 	room_slots.clear()
+	if Banklar.instance:
+		for pk in parks:
+			Banklar.instance.remove_tagged("park_%d" % int(pk.id))
+	parks.clear()
 	if _rooms == null:
 		_rooms = CanliOdalar.new()
 		_rooms.name = "CanliOdalar"
@@ -939,6 +963,10 @@ func rebuild() -> void:
 			"dukkan":
 				_build_shop(it, sb)
 				seen[int(it.id)] = true
+			"park":
+				var pc := v2(it.p)
+				var pxf := Transform3D(_yaw(it), Vector3(pc.x, float(it.get("_y", ground(pc.x, pc.y, false))), pc.y))
+				parks.append(CocukParki.build(self, it, pxf, sk, sm, _sd))
 	# Silinen dükkânlar
 	for id in _shops.keys():
 		if not seen.has(id):
