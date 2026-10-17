@@ -21,6 +21,11 @@ const BINA_SHADER := preload("res://shaders/bina.gdshader")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
 const COBBLE_SHADER := preload("res://shaders/cobble.gdshader")
 const ATLAS := preload("res://assets/sehir/cepheler.png")
+## Camdan görünen odalar (tools/sehir/oda_atlas.py) ve cephe parçalarının yerleri (cephe_atlas.py)
+const ODALAR := preload("res://assets/sehir/odalar.png")
+const CEPHE_JSON := "res://assets/sehir/cephe.json"
+## Pervaz, denizlik, tente, balkon: bu mesafeden uzakta çizilmez (telefon)
+const VIS_DETAY := 75.0
 const KAT := 3.0
 const BOLME := 3.0
 ## Şehir gövdelerinin çarpışma katmanı (zemin ışınları katman 1'e bakar: adanın kendisi)
@@ -75,6 +80,16 @@ const CHUNK := 64.0
 const VIS_BINA := 420.0
 const VIS_SUS := 160.0
 var _sd: SurfaceTool                 # kurulum sırasında renkli süslerin yüzeyi
+var _sdet: SurfaceTool               # kurulum sırasında cephe ayrıntılarının yüzeyi (pervaz, tente...)
+static var _cephe: Dictionary = {}
+## Gerçek 3D oda kurulabilecek yerler (binaların zemin kat ön cephesi): CanliOdalar okur
+var room_slots: Array = []
+var _rooms: CanliOdalar
+## Gece (0..1): odaların bir kısmının ışığı yanar. Gün döngüsü (henüz yok) bunu değiştirecek.
+var gece := 0.0:
+	set(v):
+		gece = clampf(v, 0.0, 1.0)
+		set_night(gece)
 ## Cephe çeşitlemesi için binanın tohumu (UV2.x): bütün köşelere yazılır
 static var _seed := 0.0
 
@@ -843,8 +858,18 @@ func _bina_mat() -> ShaderMaterial:
 		m.shader = BINA_SHADER
 		m.set_shader_parameter("atlas", ATLAS)
 		m.set_shader_parameter("cells", Vector2(ATLAS.get_width() / 32.0, ATLAS.get_height() / 32.0))
+		m.set_shader_parameter("rooms", ODALAR)
 		_mats["bina"] = m
 	return _mats["bina"]
+
+
+func bina_material() -> ShaderMaterial:
+	return _bina_mat()
+
+
+## Gece: odaların bir kısmının ışığı yanar (0 gündüz .. 1 gece). Gün döngüsü bunu çağırır.
+func set_night(v: float) -> void:
+	_bina_mat().set_shader_parameter("gece", clampf(v, 0.0, 1.0))
 
 
 func _cobble_mat() -> ShaderMaterial:
@@ -866,6 +891,14 @@ func rebuild() -> void:
 	_built = Node3D.new()
 	_built.name = "Yapilar"
 	add_child(_built)
+	room_slots.clear()
+	if _rooms == null:
+		_rooms = CanliOdalar.new()
+		_rooms.name = "CanliOdalar"
+		_rooms.city = self
+		add_child(_rooms)
+	else:
+		_rooms._clear()
 	_plats = []
 	_ground_update()
 	# Yükseltiler önce: üstleri merdiven ve korkulukların zemini
@@ -880,7 +913,7 @@ func rebuild() -> void:
 		var key := Vector2i(floori(float(anchor[0]) / CHUNK), floori(float(anchor[1]) / CHUNK))
 		if not chunks.has(key):
 			var set := []
-			for k in 5:
+			for k in 6:
 				var st := SurfaceTool.new()
 				st.begin(Mesh.PRIMITIVE_TRIANGLES)
 				set.append(st)
@@ -891,6 +924,7 @@ func rebuild() -> void:
 		var sk: SurfaceTool = sts[2]
 		var sm: SurfaceTool = sts[3]
 		_sd = sts[4]
+		_sdet = sts[5]
 		match String(it.t):
 			"bina":
 				_build_bina(it, sb)
@@ -924,17 +958,21 @@ func rebuild() -> void:
 		_commit(sts[2], _mat_color(Color(0.74, 0.72, 0.68)), "Beton" + tag, VIS_SUS)
 		_commit(sts[3], _mat_color(Color(0.22, 0.25, 0.3)), "Korkuluklar" + tag, VIS_SUS)
 		_commit(sts[4], _mats.vc, "Susler" + tag, VIS_SUS)
+		_commit(sts[5], _mats.vc, "Cephe" + tag, VIS_DETAY, false)
 	_sd = null
+	_sdet = null
 	if look and look.has_method("add_root"):
 		look.add_root(_built)
 
 
-func _commit(st: SurfaceTool, mat: Material, name: String, vis := 0.0) -> void:
+func _commit(st: SurfaceTool, mat: Material, name: String, vis := 0.0, shadow := true) -> void:
 	var mesh := st.commit()
 	if mesh.get_surface_count() == 0:
 		return
 	mesh.surface_set_material(0, mat)
 	var mi := MeshInstance3D.new()
+	if not shadow:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if vis > 0.0:
 		mi.visibility_range_end = vis
 		mi.visibility_range_end_margin = 20.0
@@ -1029,9 +1067,20 @@ static func _ring(st: SurfaceTool, xf: Transform3D, w: float, d: float, y0: floa
 	_box(st, xf, Vector3(-W * 0.5 + t * 0.5, ym, 0), Vector3(t, h, Dd - t * 2.0), col)
 
 
-## Cephe köşe rengi: r stil, g kapı bölmesi + 1, b satır, a 1 = dükkânlı zemin kat / 0 = konut
-static func _fc(style: int, door: int, row: int, shop_ground := true) -> Color:
-	return Color(style / 255.0, door / 255.0, row / 255.0, 1.0 if shop_ground else 0.0)
+## Atlas hücresi rengi (silme, çatı, düz duvar): r stil, b satır, a 0
+static func _fc(style: int, _door: int, row: int, _shop_ground := true) -> Color:
+	return Color(style / 255.0, 0.0, row / 255.0, 0.0)
+
+
+## Cephe hücresi rengi: a 1 = cephe (camda oda çizilir, zemin altına kaide uzar)
+static func _cell_col(style: int, row: int) -> Color:
+	return Color(style / 255.0, 0.0, row / 255.0, 1.0)
+
+
+static func _cephe_data() -> Dictionary:
+	if _cephe.is_empty():
+		_cephe = JSON.parse_string(FileAccess.get_file_as_string(CEPHE_JSON))
+	return _cephe
 
 
 # ---------- Bina ----------
@@ -1084,13 +1133,50 @@ func _build_bina(it: Dictionary, sb: SurfaceTool) -> void:
 		[Vector3(1, 0, 0), Vector3(hw, 0, hd), Vector3(hw, 0, -hd), nbd, 0],
 		[Vector3(-1, 0, 0), Vector3(-hw, 0, -hd), Vector3(-hw, 0, hd), nbd, 0],
 	]
-	for f in faces:
+	# Gerçek oda yuvası: zemin kat ön cephe (yalnız sıradan binalar; özellerin önünde süs var)
+	if not ozel:
+		# Pencere bölmelerinin ortaları (kapı bölmesi hariç), cephenin ortasına göre
+		var bays: Array = []
+		var bcw := w / nbw
+		for i in nbw:
+			if i != door - 1:
+				bays.append(-hw + (i + 0.5) * bcw)
+		bays.sort_custom(func(a, b): return absf(a) < absf(b))
+		room_slots.append({"id": int(it.get("id", 0)), "center": xf * Vector3(0, 0, hd), "normal": (basis * Vector3(0, 0, 1)).normalized(),
+			"width": w, "depth": d, "shop": shop_ground, "seed": seed, "bays": bays})
+	var odd_b := _hash(seed * 3.7) < 0.35
+	var mid_b := _hash(seed * 5.3) < 0.45
+	for fi in faces.size():
+		var f: Array = faces[fi]
 		var a: Vector3 = f[1]
 		var b: Vector3 = f[2]
 		var nb: int = f[3]
-		var ps := [xf * (a + Vector3(0, ybot, 0)), xf * (b + Vector3(0, ybot, 0)), xf * (b + Vector3(0, top, 0)), xf * (a + Vector3(0, top, 0))]
-		var uvs := [Vector2(0, v0), Vector2(nb, v0), Vector2(nb, v1), Vector2(0, v1)]
-		_quad(sb, ps, uvs, basis * f[0], _fc(style, f[4], 0, shop_ground))
+		var fdoor: int = f[4]
+		var n: Vector3 = f[0]
+		var dir := (b - a).normalized()
+		var cw := a.distance_to(b) / nb
+		for i in nb:
+			for fl in k:
+				# Satır: zemin katta kapı / vitrin / pencere; üst katlarda A ya da B çeşidi
+				var row := 0
+				if fl == 0:
+					if fdoor > 0 and i == fdoor - 1:
+						row = 2
+					elif shop_ground:
+						row = 1
+				elif _hash(fl * 7.13 + seed) < 0.3 or (odd_b and i % 2 == 1) or (mid_b and fdoor > 0 and i == fdoor - 1):
+					row = 7
+				var y0 := ybot if fl == 0 else fl * KAT
+				var y1 := (fl + 1) * KAT
+				var p0 := a + dir * (i * cw)
+				var p1 := a + dir * ((i + 1) * cw)
+				var ps := [xf * (p0 + Vector3(0, y0, 0)), xf * (p1 + Vector3(0, y0, 0)), xf * (p1 + Vector3(0, y1, 0)), xf * (p0 + Vector3(0, y1, 0))]
+				var vlo := v0 if fl == 0 else float(fl)
+				_quad(sb, ps, [Vector2(i, vlo), Vector2(i + 1, vlo), Vector2(i + 1, fl + 1), Vector2(i, fl + 1)], basis * n, _cell_col(style, row))
+				# Cephe derinliği (arka cephe sokağa bakmaz: yok)
+				if fi != 1 and _sdet and (row == 0 or row == 1 or row == 7):
+					var cf := xf * Transform3D(Basis(dir, Vector3.UP, n), p0 + Vector3(0, y1, 0))
+					_facade_parts(cf, cw, style, row)
 	var trim := _fc(style, 0, 3)
 	# Kaide ve kat silmesi
 	_ring(sb, xf, w, d, ybot, 0.35, 0.05, 0.12, trim)
@@ -1140,6 +1226,120 @@ func _build_bina(it: Dictionary, sb: SurfaceTool) -> void:
 			if ad != "" and (bool(it.get("tabela_zorla", false)) or shop_ground):
 				_sign_board(sb, xf, w, hd, trim, ad)
 	_seed = 0.0
+
+
+## Bir cephe hücresinin ayrıntıları (cephe.json): pencere pervazı ve alın, denizlik, tente,
+## balkon ve korkuluk. cf: hücrenin sol üst köşesi; x sağa, y yukarı, z dışarı (m).
+## Telefon için yalın: yalnız görünen yüzler (duvara yapışık ve arka yüzler yok).
+func _facade_parts(cf: Transform3D, cw: float, style: int, row: int) -> void:
+	var st: Dictionary = _cephe_data().stiller[style]
+	var parts: Array = st.satirlar.get(str(row), [])
+	if parts.is_empty():
+		return
+	var mx := cw / 32.0
+	var my := KAT / 32.0
+	var trim := _vc(String(st.pervaz))
+	var trim_d := Color(trim.r * 0.86, trim.g * 0.86, trim.b * 0.86, trim.a)
+	var acc := _vc(String(st.vurgu))
+	acc = Color(acc.r * 0.8, acc.g * 0.8, acc.b * 0.8, 1.0)
+	var balcony := false
+	for pt in parts:
+		if pt.t == "balkon":
+			balcony = true
+	for pt in parts:
+		# Piksel dikdörtgeni -> metre (x0 sol, x1 sağ, yt üst, yb alt; y yukarı)
+		var x0 := float(pt.x) * mx
+		var x1 := (float(pt.x) + float(pt.w)) * mx
+		var yt := -float(pt.y) * my
+		var yb := -(float(pt.y) + float(pt.h)) * my
+		match String(pt.t):
+			"cam", "vitrin":
+				var d := 0.08 if pt.t == "vitrin" else 0.06
+				_frame(cf, x0, yb, x1, yt, mx, d, trim)
+				if pt.t == "cam":
+					_slab(cf, x0 - 2 * mx, yt + mx, x1 + 2 * mx, yt + mx + 2 * my, 0.11, trim_d)      # alın
+				else:
+					_slab(cf, x0 - mx, yb - mx - 2 * my, x1 + mx, yb - mx, 0.16, trim_d)             # vitrin altı
+			"denizlik":
+				_slab(cf, x0, yb, x1, yt, 0.16, trim_d)
+			"tente":
+				_awning(cf, x0, -yt, x1 - x0, Color(String(pt.renk)))
+			"balkon":
+				_slab(cf, x0, yb, x1, yt, 0.85, trim_d)
+			"korkuluk":
+				var z := 0.82 if balcony else 0.2
+				_slab(cf, x0, yt - 0.05, x1, yt, z + 0.03, acc, z - 0.03)                         # tutamak
+				var posts := maxi(int((x1 - x0) / 0.35), 2)
+				for q in posts + 1:
+					var px := x0 + (x1 - x0) * q / posts
+					_flat(cf, px - 0.015, yb, px + 0.015, yt, z, acc)
+				if balcony:
+					for sx: float in [x0, x1]:
+						_side(cf, sx, yt - 0.05, yt, 0.0, z, acc)
+
+
+## Duvara dik düz dörtgen (z uzaklıkta, dışa bakar)
+func _flat(cf: Transform3D, x0: float, y0: float, x1: float, y1: float, z: float, col: Color) -> void:
+	_quad(_sdet, [cf * Vector3(x0, y0, z), cf * Vector3(x1, y0, z), cf * Vector3(x1, y1, z), cf * Vector3(x0, y1, z)],
+		[Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], cf.basis * Vector3(0, 0, 1), col)
+
+
+## Yanda dik şerit (x sabit; y0..y1, z0..z1), dışa (x yönüne) bakar
+func _side(cf: Transform3D, x: float, y0: float, y1: float, z0: float, z1: float, col: Color, nx := 1.0) -> void:
+	_quad(_sdet, [cf * Vector3(x, y0, z0), cf * Vector3(x, y0, z1), cf * Vector3(x, y1, z1), cf * Vector3(x, y1, z0)],
+		[Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], cf.basis * Vector3(nx, 0, 0), col)
+
+
+## Duvardan çıkan ince levha (denizlik, alın, balkon): ön, üst ve alt yüz
+func _slab(cf: Transform3D, x0: float, y0: float, x1: float, y1: float, z1: float, col: Color, z0 := 0.0) -> void:
+	_flat(cf, x0, y0, x1, y1, z1, col)
+	var top := Color(col.r * 1.06, col.g * 1.06, col.b * 1.06, col.a)
+	_quad(_sdet, [cf * Vector3(x0, y1, z0), cf * Vector3(x1, y1, z0), cf * Vector3(x1, y1, z1), cf * Vector3(x0, y1, z1)],
+		[Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], cf.basis * Vector3(0, 1, 0), top)
+	var bot := Color(col.r * 0.7, col.g * 0.7, col.b * 0.7, col.a)
+	_quad(_sdet, [cf * Vector3(x0, y0, z0), cf * Vector3(x1, y0, z0), cf * Vector3(x1, y0, z1), cf * Vector3(x0, y0, z1)],
+		[Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], cf.basis * Vector3(0, -1, 0), bot)
+
+
+## Pencere pervazı: camın çevresinde t kalın, d çıkıntılı çerçeve; ön yüz ve camın kenarındaki
+## iç derinlik (cam içeride, gölgeli kenarlarla)
+func _frame(cf: Transform3D, x0: float, y0: float, x1: float, y1: float, t: float, d: float, col: Color) -> void:
+	_flat(cf, x0 - t, y1, x1 + t, y1 + t, d, col)
+	_flat(cf, x0 - t, y0 - t, x1 + t, y0, d, col)
+	_flat(cf, x0 - t, y0, x0, y1, d, col)
+	_flat(cf, x1, y0, x1 + t, y1, d, col)
+	var inner := Color(col.r * 0.72, col.g * 0.72, col.b * 0.72, col.a)
+	_side(cf, x0, y0, y1, 0.0, d, inner, 1.0)
+	_side(cf, x1, y0, y1, 0.0, d, inner, -1.0)
+	_quad(_sdet, [cf * Vector3(x0, y1, 0.0), cf * Vector3(x1, y1, 0.0), cf * Vector3(x1, y1, d), cf * Vector3(x0, y1, d)],
+		[Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], cf.basis * Vector3(0, -1, 0), Color(col.r * 0.6, col.g * 0.6, col.b * 0.6, col.a))
+	_quad(_sdet, [cf * Vector3(x0, y0, 0.0), cf * Vector3(x1, y0, 0.0), cf * Vector3(x1, y0, d), cf * Vector3(x0, y0, d)],
+		[Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], cf.basis * Vector3(0, 1, 0), Color(col.r * 0.95, col.g * 0.95, col.b * 0.95, col.a))
+
+
+## Tente: duvardan dışarı eğik, renkli ve krem şeritli; önünde sarkan saçak (şerit başına 2 yüz)
+func _awning(cf: Transform3D, x: float, ytop: float, w: float, col: Color) -> void:
+	var out := 0.95
+	var drop := 0.5
+	var n := maxi(int(w / 0.28), 2)
+	var sw := w / n
+	var cream := Color(0.98, 0.96, 0.92)
+	var y0 := -ytop
+	var slope_n := (cf.basis * Vector3(0, out, drop)).normalized()
+	for i in n:
+		var c := col if i % 2 == 0 else cream
+		var xa := x + i * sw
+		var xb := xa + sw
+		_quad(_sdet, [cf * Vector3(xa, y0, 0.0), cf * Vector3(xb, y0, 0.0), cf * Vector3(xb, y0 - drop, out), cf * Vector3(xa, y0 - drop, out)],
+			[Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], slope_n, c)
+		_flat(cf, xa, y0 - drop - 0.16, xb, y0 - drop, out, c)
+	# Alt yüz tek parça (gölgeli)
+	var dark := Color(col.r * 0.55, col.g * 0.55, col.b * 0.55)
+	_quad(_sdet, [cf * Vector3(x, y0, 0.0), cf * Vector3(x + w, y0, 0.0), cf * Vector3(x + w, y0 - drop, out), cf * Vector3(x, y0 - drop, out)],
+		[Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], -slope_n, dark)
+	for sx: float in [x, x + w]:
+		var t := [cf * Vector3(sx, y0, 0.0), cf * Vector3(sx, y0 - drop, out), cf * Vector3(sx, y0 - drop - 0.16, out)]
+		_tri(_sdet, t, [Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], cf.basis * Vector3(1 if sx > x else -1, 0, 0), col)
 
 
 ## Tabela: zemin katın üstünde levha ve yazı

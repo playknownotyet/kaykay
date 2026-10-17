@@ -10,7 +10,13 @@ Satırlar (shaders/bina.gdshader ile aynı):
   6 kiremit çatı                 7 üst kat bölmesi B (çeşit: balkon, kemer, çift pencere...)
 Sütunlar: 0-15 sıradan binalar, 16-21 özel binalar (müze, sinema, kafe, otel, kütüphane, fırın;
 sırası scripts/sehir/sehir.gd OZEL ile aynı).
+
+Cam pikselleri saydamlık kanalında işaretli (alfa = GLASS_A): gölgelendirici oralarda camın
+arkasındaki odayı çizer (iç mekân). Perdeler, raftaki mallar camın önünde, opak kalır.
+Pencerelerin, denizliklerin, tentelerin ve balkonların yerleri assets/sehir/cephe.json'a yazılır:
+şehir bunlardan cephe derinliğini (pervaz, denizlik, tente, balkon) kurar.
 """
+import json
 import math
 import os
 import random
@@ -19,6 +25,19 @@ from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "..", "assets", "sehir", "cepheler.png")
+OUT_JSON = os.path.join(HERE, "..", "..", "assets", "sehir", "cephe.json")
+GLASS_A = 160
+# (stil, satır) -> [{t: tür, x, y, w, h}] piksel (hücre içinde, y aşağı)
+PARTS = {}
+_cur = [None]
+
+
+def note(t, x, y, w, h, **kw):
+    if _cur[0] is None:
+        return
+    d = dict(t=t, x=x, y=y, w=w, h=h)
+    d.update(kw)
+    PARTS.setdefault(_cur[0], []).append(d)
 C = 32
 COLS = 24
 ROWS = 8
@@ -70,10 +89,13 @@ class Cell:
     def __init__(self, img, col, row):
         self.img, self.x0, self.y0 = img, col * C, row * C
 
-    def px(self, x, y, c):
+    def px(self, x, y, c, a=255):
         x, y = int(x), int(y)
         if 0 <= x < C and 0 <= y < C:
-            self.img.putpixel((self.x0 + x, self.y0 + y), c + (255,))
+            self.img.putpixel((self.x0 + x, self.y0 + y), c + (a,))
+
+    def glass(self, x, y, c):
+        self.px(x, y, c, GLASS_A)
 
     def rect(self, x0, y0, x1, y1, c):
         for y in range(int(y0), int(y1) + 1):
@@ -120,18 +142,20 @@ def curtain(cell, rnd, x0, y0, w, h):
 
 
 def pane(cell, x0, y0, w, h, trim, bars=True):
+    note("cam", x0, y0, w, h)
     cell.rect(x0 - 1, y0 - 1, x0 + w, y0 + h, trim)
     for y in range(h):
         g = glass(y, h)
         for x in range(w):
             c = mix(g, (255, 255, 255), 0.45) if (x - y) % 9 in (0, 1) and y < h * 0.6 else g
-            cell.px(x0 + x, y0 + y, c)
+            cell.glass(x0 + x, y0 + y, c)
     if bars:
         cell.rect(x0 + w // 2, y0, x0 + w // 2, y0 + h - 1, trim)
         cell.rect(x0, y0 + h // 3, x0 + w - 1, y0 + h // 3, trim)
 
 
 def sill(cell, st, x0, y, w):
+    note("denizlik", x0 - 2, y, w + 4, 2)
     cell.rect(x0 - 2, y, x0 + w + 1, y + 1, shade(rgb(st["trim"]), 0.92))
     cell.rect(x0 - 2, y + 2, x0 + w + 1, y + 2, shade(rgb(st["wall"]), 0.72))
 
@@ -153,6 +177,7 @@ def flower_box(cell, x0, y0, w, rnd):
 
 
 def railing(cell, st, x0, y0, w):
+    note("korkuluk", x0, y0, w, 7)
     acc = shade(rgb(st["accent"]), 0.9)
     cell.rect(x0, y0, x0 + w - 1, y0, acc)
     cell.rect(x0, y0 + 5, x0 + w - 1, y0 + 6, shade(acc, 0.75))
@@ -183,7 +208,10 @@ def win_arch(cell, st, rnd):
         for x in range(x0 - 1, x0 + w + 1):
             d = math.hypot(x - cx, (y - y0 + 0.5))
             if d <= r + 0.6:
-                cell.px(x, y, trim if d > r - 0.6 else mix(rgb("#e7f3fb"), rgb("#9fc4dc"), 0.3))
+                if d > r - 0.6:
+                    cell.px(x, y, trim)
+                else:
+                    cell.glass(x, y, mix(rgb("#e7f3fb"), rgb("#9fc4dc"), 0.3))
     curtain(cell, rnd, x0, y0, w, h)
     sill(cell, st, x0, y0 + h + 1, w)
     if st["flowers"]:
@@ -205,6 +233,7 @@ def win_balcony(cell, st, rnd):
     trim = rgb(st["trim"])
     pane(cell, 11, 4, 10, 22, trim)
     curtain(cell, rnd, 11, 4, 10, 22)
+    note("balkon", 4, 26, 24, 2)
     cell.rect(4, 26, 27, 27, shade(trim, 0.9))                 # balkon döşemesi
     cell.rect(5, 28, 26, 28, shade(rgb(st["wall"]), 0.6))
     railing(cell, st, 4, 19, 24)
@@ -225,11 +254,15 @@ def win_french(cell, st, rnd):
 def win_round(cell, st, rnd):
     trim = rgb(st["trim"])
     cx, cy, r = 15.5, 13.5, 6.5
+    note("yuvarlak", 9, 7, 14, 14)
     for y in range(C):
         for x in range(C):
             d = math.hypot(x - cx, y - cy)
             if d <= r + 1:
-                cell.px(x, y, trim if d > r - 0.5 else glass(int(y - (cy - r)), int(2 * r)))
+                if d > r - 0.5:
+                    cell.px(x, y, trim)
+                else:
+                    cell.glass(x, y, glass(int(y - (cy - r)), int(2 * r)))
     cell.rect(15, 8, 16, 19, trim)
     cell.rect(10, 13, 21, 14, trim)
     if st["flowers"]:
@@ -249,6 +282,7 @@ def upper(cell, st, rnd, kind):
 # ---------- Zemin kat ----------
 
 def awning(cell, color, y0=3):
+    note("tente", 1, y0, 30, 6, renk=color)
     aw = rgb(color)
     for x in range(1, 31):
         c = aw if (x // 3) % 2 == 0 else (250, 246, 238)
@@ -259,11 +293,12 @@ def awning(cell, color, y0=3):
 
 def shopfront(cell, st, rnd, goods=None):
     trim = rgb(st["trim"])
+    note("vitrin", 4, 10, 24, 18)
     cell.rect(3, 9, 28, 28, trim)
     for y in range(10, 28):
         g = mix(rgb("#d8eef8"), rgb("#6c97b8"), (y - 10) / 17)
         for x in range(4, 28):
-            cell.px(x, y, mix(g, (255, 255, 255), 0.4) if (x - y) % 11 in (0, 1) and y < 20 else g)
+            cell.glass(x, y, mix(g, (255, 255, 255), 0.4) if (x - y) % 11 in (0, 1) and y < 20 else g)
     goods = goods or ["#e05a6a", "#f0b44c", "#7cc6b0", "#8b5fbf", "#4f9a4a"]
     for x in range(5, 27, 3):
         cell.rect(x, 24, x + 1, 27, rgb(rnd.choice(goods)))
@@ -376,17 +411,30 @@ def main():
     img = Image.new("RGBA", (C * COLS, C * ROWS), (0, 0, 0, 0))
     for i, st in enumerate(STYLES):
         rnd = random.Random(1000 + i)
+        _cur[0] = (i, 0)
         upper(Cell(img, i, 0), st, rnd, st["a"])
+        _cur[0] = (i, 1)
         ground(Cell(img, i, 1), st, rnd)
+        _cur[0] = None
         door(Cell(img, i, 2), st, rnd)
         trim_cell(Cell(img, i, 3), st)
         roof_flat(Cell(img, i, 4), rnd)
         wall_fill(Cell(img, i, 5), st, rnd)
         roof_tiles(Cell(img, i, 6), rnd, ROOF_TILES[i % len(ROOF_TILES)])
+        _cur[0] = (i, 7)
         upper(Cell(img, i, 7), st, rnd, st["b"])
+        _cur[0] = None
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     img.save(OUT)
-    print("CEPHE", OUT, len(STYLES), "stil")
+    data = {"hucre": C, "stiller": []}
+    for i, st in enumerate(STYLES):
+        data["stiller"].append({
+            "duvar": st["wall"], "pervaz": st["trim"], "vurgu": st["accent"], "tente": st["awning"],
+            "satirlar": {str(r): PARTS.get((i, r), []) for r in (0, 1, 7)},
+        })
+    with open(OUT_JSON, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    print("CEPHE", OUT, len(STYLES), "stil;", OUT_JSON)
 
 
 main()
