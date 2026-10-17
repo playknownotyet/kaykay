@@ -205,6 +205,8 @@ func _ready() -> void:
 	_new_list()
 	_cam = Camera3D.new()
 	_cam.name = "KesifKamerasi"
+	# Dükkân içi ve tepeden bakış: uzak şehir çizilmez (varsayılan 4 km tüm adayı çiziyordu)
+	_cam.far = 140.0
 	add_child(_cam)
 	_cam.top_level = true
 	_layer = CanvasLayer.new()

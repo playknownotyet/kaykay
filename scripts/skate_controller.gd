@@ -184,6 +184,8 @@ var _snap_offset := Vector3.ZERO
 var _last_rail: GrindRail
 var _last_rail_timer := 0.0
 var _latch_block := 0.0
+## Araba oyuncuya en az bu hızla (m/sn) doğru gelirse "araba çarptı" (düşme); altı duvar sayılır
+const CAR_HIT_SPEED := 1.5
 var _rail_side := 1.0       # raya hangi yandan gelindi (+1 sağ, -1 sol; gidiş yönüne göre)
 
 const COYOTE_TIME := 0.1
@@ -522,10 +524,19 @@ func _handle_walls() -> void:
 		var car := col.get_collider() as Araba
 		if car and n.y < wall_dot:
 			var nh := Vector3(n.x, 0.0, n.z).normalized()
-			var rel := maxf(-velocity.dot(nh), 0.0) + maxf(car.speed * car.fwd.dot(nh), 0.0)
-			if rel >= stumble_creature_kmh / 3.6:
-				knockdown(nh * (rel * 0.5 + 1.0) + car.fwd * car.speed * 0.6)
+			# "Araba çarptı" (düşme) yalnız araba kendisi oyuncunun üstüne sürerken. Duran ya da
+			# yanaşmayan arabaya oyuncu çarparsa duvar gibidir (sarsılma, sekme); aynı yöne giden
+			# arabanın arkasına yetişince geri sekmez, onun hızına uyar.
+			var car_v := car.fwd * car.speed
+			var toward := car_v.dot(nh)          # arabanın oyuncuya doğru hızı
+			if toward >= CAR_HIT_SPEED:
+				knockdown(nh * (toward * 0.5 + 1.0) + car_v * 0.6)
 				return
+			if toward < -0.5:
+				var along := maxf(car_v.dot(heading), 0.0)
+				if speed > along and -heading.dot(nh) > 0.3:
+					speed = lerpf(speed, along, 0.5)
+				continue
 		if n.y >= wall_dot or n.y < -0.5:
 			continue
 		var nh := Vector3(n.x, 0.0, n.z).normalized()

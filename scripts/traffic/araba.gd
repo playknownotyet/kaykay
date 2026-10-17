@@ -44,6 +44,7 @@ var cached_gap := 1e9
 var cached_lead_v := 0.0
 var cached_vmax := 10.0
 var reason := ""                 # son karar: neden yavaşlıyor (hata ayıklama)
+var pose_acc := 0.0              # son konum güncellemesinden beri geçen süre (tekerlek dönüşü)
 
 var _wheels: Array[Node3D] = []
 var _front: Array[Node3D] = []
@@ -56,6 +57,8 @@ var _braking := false
 var _driver_anim: AnimationPlayer
 var _model: Node3D
 var _far := false
+var _cs: CollisionShape3D
+var _phys := true
 
 
 func setup(key: String, color_index: int, rng: RandomNumberGenerator, npc_materials: Dictionary) -> void:
@@ -69,6 +72,7 @@ func setup(key: String, color_index: int, rng: RandomNumberGenerator, npc_materi
 	cs.shape = shape
 	cs.position = Vector3(0, half.y + 0.05, 0)
 	add_child(cs)
+	_cs = cs
 	set_meta("surface", "metal")
 
 	_model = m.scene.instantiate()
@@ -82,6 +86,28 @@ func setup(key: String, color_index: int, rng: RandomNumberGenerator, npc_materi
 	if not _wheels.is_empty():
 		_wheel_r = _wheels[0].position.y
 	_add_driver(rng, npc_materials, m.roof)
+	_set_lod()
+
+
+## Uzaklığa göre çizim: sürücü ve iç donanım yalnız yakında (camdan görünür), tekerlek ve
+## lambalar orta mesafede, uzaktan yalnız gövde. 40 arabada ~1200 parça telefonu yoruyordu.
+func _set_lod() -> void:
+	for g in _model.find_children("*", "GeometryInstance3D", true, false):
+		var gi := g as GeometryInstance3D
+		var nm := String(gi.name)
+		var end := 320.0
+		if _model.get_node_or_null("Surucu") and (_model.get_node("Surucu") as Node).is_ancestor_of(gi):
+			end = 40.0
+		elif nm in ["Ic", "Direksiyon"]:
+			end = 40.0
+		elif nm.begins_with("Teker"):
+			end = 90.0
+		elif nm in ["Far", "Stop", "Tampon"]:
+			end = 120.0
+		gi.visibility_range_end = end
+		gi.visibility_range_end_margin = 8.0
+		if end < 100.0:
+			gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 func _paint(node: Node, body_color: Color) -> void:
@@ -136,6 +162,7 @@ func _add_driver(rng: RandomNumberGenerator, npc_materials: Dictionary, roof: fl
 	# Oturunca kuyruk koltuktan ve araç tabanından aşağı sarkıyordu: sürücüde kuyruk yok
 	recipe.parts = recipe.parts.filter(func(n): return not String(n).begins_with("tur_kuyruk"))
 	var driver := Npc.build_model(recipe, npc_materials)
+	driver.name = "Surucu"
 	_model.add_child(driver)
 	_driver_anim = driver.find_child("AnimationPlayer", true, false)
 	if _driver_anim == null or not _driver_anim.has_animation("drive"):
@@ -189,6 +216,14 @@ func set_far(value: bool) -> void:
 	_far = value
 	if _driver_anim:
 		_driver_anim.active = not value
+
+
+## Oyuncudan uzaktayken çarpışma gövdesi fizik dünyasından çıkar (her kare taşınması pahalı)
+func set_physics_near(value: bool) -> void:
+	if value == _phys:
+		return
+	_phys = value
+	_cs.set_deferred("disabled", not value)
 
 
 ## Tutunma noktası: arka tamponun SKITCH_GAP gerisinde, yol yüksekliğinde.

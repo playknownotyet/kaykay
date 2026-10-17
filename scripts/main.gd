@@ -185,6 +185,11 @@ func _resize_world() -> void:
 ## Zayıf telefonlar için çizim ayarları. Retro görünümde kenar yumuşatma
 ## işe yaramaz, gölgeler de sert ve tek kademeli daha iyi durur.
 func _setup_performance() -> void:
+	# Telefonda kare hızı 60'ta sabit: ekranın gösteremeyeceği fazladan kareler (120-180 FPS)
+	# işlemciyi ve ekran kartını boşuna ısıtır; birkaç dakikada telefon kendini yavaşlatır
+	if OS.has_feature("mobile"):
+		Engine.max_fps = 60
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 	get_viewport().msaa_3d = Viewport.MSAA_DISABLED
 	RenderingServer.directional_shadow_atlas_set_size(1024, true)
 	RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD)

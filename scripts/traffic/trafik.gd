@@ -47,6 +47,12 @@ var _spawnable: Array[int] = []
 var _spawn_weight := 0.0
 var _to_top := PackedFloat32Array()   # şeridin sonundan tepeye kalan yol (m)
 var _skitched: Araba = null
+var _peds: Array = []          # bu karenin yayaları [konum, hız] (her arabada yeniden toplanmasın)
+## Oyuncudan bu kadar uzaktaki arabalar daha seyrek karar verir (telefonda işlemci)
+const FAR_DECIDE := 90.0
+const VERY_FAR_DECIDE := 160.0
+## Bu mesafeden uzaktaki arabaların çarpışma gövdesi kapalı
+const PHYS_NEAR := 45.0
 
 
 func _ready() -> void:
@@ -73,6 +79,16 @@ func _ready() -> void:
 			_spawnable.append(i)
 			_spawn_weight += L.len
 	_mark_uphill()
+	for i in _lanes.size():
+		var L: Dictionary = _lanes[i]
+		var lsp := PackedVector3Array()
+		var lsl := PackedFloat32Array()
+		var n := int(floor(L.len / PATH_STEP))
+		for k in n + 1:
+			lsp.append(_lane_point(i, k * PATH_STEP))
+			lsl.append(_lane_limit(i, k * PATH_STEP))
+		L.sp = lsp
+		L.sl = lsl
 	_ready_lanes = true
 	# Kalabalık ve kamera hazır olsun
 	await get_tree().physics_frame
@@ -287,6 +303,12 @@ func _physics_process(delta: float) -> void:
 	_frame += 1
 	var t := TrafikSinyal.now()
 	var ppos := player.global_position if player else Vector3(1e6, 0, 0)
+	_peds.clear()
+	if player:
+		_peds.append([player.global_position, maxf(player.velocity.length(), 0.0), true])
+	if crowd:
+		for n in crowd.npc_list():
+			_peds.append([n.global_position, 0.0, false])
 	var cam_pos := camera.global_position if camera else ppos
 	var candidate: Araba = null
 	var cand_d := 1e9
@@ -296,9 +318,17 @@ func _physics_process(delta: float) -> void:
 			if recycled < 2 and _place(car, false):
 				recycled += 1
 			continue
-		if _frame % 2 == car.decide_phase:
-			_decide(car, t)
-		_drive(car, delta)
+		# Karar: yakındakiler iki karede bir, uzaktakiler dört, çok uzaktakiler sekiz karede bir
+		var d2 := car.global_position.distance_squared_to(ppos)
+		var every := 2 if d2 < FAR_DECIDE * FAR_DECIDE else (4 if d2 < VERY_FAR_DECIDE * VERY_FAR_DECIDE else 8)
+		if _frame % every == (car.decide_phase * every) / 2:
+			_decide(car, t, every > 2)
+		car.set_physics_near(d2 < PHYS_NEAR * PHYS_NEAR or (player != null and player.skitch_car == car))
+		# Uzaktaki arabaların konumu seyrek güncellenir (her güncelleme modelin tüm parçalarını taşır)
+		var pose_every := 1 if d2 < 80.0 * 80.0 else (2 if d2 < 150.0 * 150.0 else 4)
+		car.pose_acc += delta
+		var do_pose := (_frame + car.decide_phase) % pose_every == 0
+		_drive(car, delta, do_pose)
 		car.set_far(car.global_position.distance_to(cam_pos) > detail_distance)
 		# Oyuncuya çarpma ve tutunma
 		if player:
@@ -326,7 +356,7 @@ func _physics_process(delta: float) -> void:
 
 
 ## Sürüş kararı (iki karede bir): önümdeki yolun hız sınırı, ışık, öndeki araba ve yayalar.
-func _decide(car: Araba, t: float) -> void:
+func _decide(car: Araba, t: float, coarse := false) -> void:
 	var v := car.speed
 	var horizon := maxf(LOOK_MIN, v * v / (2.0 * B_COMF) + 18.0)
 	var vmax := _lane_limit(car.lane, car.s)
@@ -335,8 +365,11 @@ func _decide(car: Araba, t: float) -> void:
 	var blocker: Araba = null
 	var why := ""
 
-	# Yol örnekleri ve hız sınırı (virajdan önce yavaşla)
-	var samples: Array = []      # [mesafe, nokta]
+	# Yol örnekleri ve hız sınırı (virajdan önce yavaşla). Şerit örnekleri önceden hesaplı
+	# (L.sp / L.sl, PATH_STEP aralıkla); uzaktaki arabalar ikide bir örneğe bakar.
+	var sd := PackedFloat32Array()      # örneğin yol boyunca uzaklığı
+	var sp := PackedVector3Array()      # örnek noktası
+	var stride := 2 if coarse else 1
 	var li := car.lane
 	var s := car.s
 	var dist := 0.0
@@ -344,56 +377,70 @@ func _decide(car: Araba, t: float) -> void:
 	var signal_done := false
 	while dist < horizon:
 		var L: Dictionary = _lanes[li]
-		var step := minf(PATH_STEP, L.len - s)
-		if step <= 0.01:
-			# Şerit sonu: ışıklı kavşağa geldik mi?
-			if not signal_done and int(L.j) >= 0:
-				signal_done = true
-				var stop_d: float = dist - car.half.z - 0.4
-				if stop_d > -1.0:
-					var stv := TrafikSinyal.car_state(L.j, L.arm, t)
-					var must_stop := stv == TrafikSinyal.KIRMIZI
-					if stv == TrafikSinyal.SARI and stop_d > v * v / (2.0 * 4.5):
-						must_stop = true
-					if not must_stop and TrafikSinyal.must_yield(int(L.j), int(L.arm)) and _priority_traffic(car, int(L.j)):
-						must_stop = true
-						stv = TrafikSinyal.KIRMIZI
-					if not must_stop and k < car.route.size() and _exit_blocked(car, k):
-						must_stop = true
-					if not must_stop and k < car.route.size() and _lanes[car.route[k]].turn == "sol" 							and _oncoming(car, int(L.j), int(L.arm), t):
-						must_stop = true
-					if must_stop and stop_d < gap:
-						gap = maxf(stop_d, 0.05)
-						lead_v = 0.0
-						blocker = null
-						why = "ışık" if stv != TrafikSinyal.YESIL else "çıkış dolu"
-			if k >= car.route.size():
+		var lsp: PackedVector3Array = L.sp
+		var lsl: PackedFloat32Array = L.sl
+		var base := dist - s                     # şeridin başının yol boyunca uzaklığı
+		var i := int(s / PATH_STEP) + 1
+		while i < lsp.size():
+			var dd := base + i * PATH_STEP
+			if dd >= horizon:
 				break
-			li = car.route[k]
-			k += 1
-			s = 0.0
-			continue
-		s += step
-		dist += step
-		var p := _lane_point(li, s)
-		samples.append([dist, p])
-		var lim := _lane_limit(li, s)
-		vmax = minf(vmax, sqrt(lim * lim + 2.0 * B_COMF * 0.7 * maxf(dist - car.half.z, 0.0)))
+			sd.append(dd)
+			sp.append(lsp[i])
+			var lim := lsl[i]
+			vmax = minf(vmax, sqrt(lim * lim + 2.0 * B_COMF * 0.7 * maxf(dd - car.half.z, 0.0)))
+			i += stride
+		dist = base + float(L.len)
+		if dist >= horizon:
+			break
+		# Şerit sonu: ışıklı kavşağa geldik mi?
+		if not signal_done and int(L.j) >= 0:
+			signal_done = true
+			var stop_d: float = dist - car.half.z - 0.4
+			if stop_d > -1.0:
+				var stv := TrafikSinyal.car_state(L.j, L.arm, t)
+				var must_stop := stv == TrafikSinyal.KIRMIZI
+				if stv == TrafikSinyal.SARI and stop_d > v * v / (2.0 * 4.5):
+					must_stop = true
+				if not must_stop and TrafikSinyal.must_yield(int(L.j), int(L.arm)) and _priority_traffic(car, int(L.j)):
+					must_stop = true
+					stv = TrafikSinyal.KIRMIZI
+				if not must_stop and k < car.route.size() and _exit_blocked(car, k):
+					must_stop = true
+				if not must_stop and k < car.route.size() and _lanes[car.route[k]].turn == "sol" \
+						and _oncoming(car, int(L.j), int(L.arm), t):
+					must_stop = true
+				if must_stop and stop_d < gap:
+					gap = maxf(stop_d, 0.05)
+					lead_v = 0.0
+					blocker = null
+					why = "ışık" if stv != TrafikSinyal.YESIL else "çıkış dolu"
+		if k >= car.route.size():
+			break
+		li = car.route[k]
+		k += 1
+		s = 0.0
 
-	# Öndeki arabalar
+	# Öndeki arabalar. Yol boyunca uzaklık kuş uçuşundan kısa olamaz: yalnız kuş uçuşu
+	# uzaklığın çevresindeki örneklere bakılır (her örneği her arabayla karşılaştırmak pahalı)
 	var pos := car.global_position
+	var n_s := sd.size()
+	var far2 := (horizon + 8.0) * (horizon + 8.0)
 	for o in _cars:
 		if o == car or o.lane < 0:
 			continue
-		var rel := o.global_position - pos
-		if rel.length_squared() > (horizon + 8.0) * (horizon + 8.0) or rel.dot(car.fwd) < 0.0:
+		var op := o.global_position
+		var rel := op - pos
+		var r2 := rel.length_squared()
+		if r2 > far2 or rel.dot(car.fwd) < 0.0:
 			continue
 		if o.blocked_by == car and o.get_instance_id() < car.get_instance_id():
 			continue   # karşılıklı kilitlenme: biri yol verir
-		for smp in samples:
-			var sp: Vector3 = smp[1]
-			if absf(sp.y - o.global_position.y) < 2.5 and Vector2(sp.x - o.global_position.x, sp.z - o.global_position.z).length() < LANE_HALF:
-				var g: float = smp[0] - o.half.z - car.half.z
+		var i0 := maxi(sd.bsearch(sqrt(r2) - 4.0) - 1, 0)
+		for i in range(i0, mini(i0 + 12, n_s)):
+			var q := sp[i]
+			if absf(q.y - op.y) < 2.5 and (q.x - op.x) * (q.x - op.x) + (q.z - op.z) * (q.z - op.z) < LANE_HALF * LANE_HALF:
+				var g: float = sd[i] - o.half.z - car.half.z
 				if g < gap:
 					gap = maxf(g, 0.05)
 					lead_v = o.speed * maxf(o.fwd.dot(car.fwd), 0.0)
@@ -402,24 +449,23 @@ func _decide(car: Araba, t: float) -> void:
 				break
 
 	# Yayalar: oyuncu ve NPC'ler (yaya geçidinde, yolda)
-	var peds: Array = []
-	if player and player.skitch_car != car:
-		peds.append([player.global_position, maxf(player.velocity.dot(car.fwd), 0.0)])
-	if crowd:
-		for n in crowd.npc_list():
-			peds.append([n.global_position, 0.0])
-	for pd in peds:
+	var h2 := horizon * horizon
+	for pd in _peds:
+		if pd[2] and player.skitch_car == car:
+			continue
 		var pp: Vector3 = pd[0]
 		var rel := pp - pos
-		if rel.length_squared() > horizon * horizon or rel.dot(car.fwd) < 0.0:
+		var r2 := rel.length_squared()
+		if r2 > h2 or rel.dot(car.fwd) < 0.0:
 			continue
-		for smp in samples:
-			var sp: Vector3 = smp[1]
-			if absf(sp.y - pp.y) < 2.0 and Vector2(sp.x - pp.x, sp.z - pp.z).length() < PED_HALF:
-				var g: float = smp[0] - car.half.z - 1.0
+		var i0 := maxi(sd.bsearch(sqrt(r2) - 4.0) - 1, 0)
+		for i in range(i0, mini(i0 + 12, n_s)):
+			var q := sp[i]
+			if absf(q.y - pp.y) < 2.0 and (q.x - pp.x) * (q.x - pp.x) + (q.z - pp.z) * (q.z - pp.z) < PED_HALF * PED_HALF:
+				var g: float = sd[i] - car.half.z - 1.0
 				if g < gap:
 					gap = maxf(g, 0.05)
-					lead_v = pd[1]
+					lead_v = float(pd[1]) * (maxf(player.velocity.normalized().dot(car.fwd), 0.0) if pd[2] else 0.0)
 					blocker = null
 					why = "yaya"
 				break
@@ -478,7 +524,7 @@ func _exit_blocked(car: Araba, k: int) -> bool:
 	return false
 
 
-func _drive(car: Araba, delta: float) -> void:
+func _drive(car: Araba, delta: float, do_pose := true) -> void:
 	var v := car.speed
 	var a: float
 	if car.hold > 0.0:
@@ -506,7 +552,9 @@ func _drive(car: Araba, delta: float) -> void:
 		car.s -= _lanes[car.lane].len
 		car.lane = car.route.pop_front()
 		_extend_route(car)
-	_pose(car, delta, a < -1.2 or (v < 0.3 and car.cached_gap < 6.0))
+	if do_pose:
+		_pose(car, car.pose_acc, a < -1.2 or (v < 0.3 and car.cached_gap < 6.0))
+		car.pose_acc = 0.0
 
 
 func _pose(car: Araba, delta: float, braking := false) -> void:
@@ -531,6 +579,13 @@ func _check_hit(car: Araba) -> void:
 		return
 	var lp := car.global_transform.affine_inverse() * (player.global_position + Vector3.UP * 0.6)
 	var h := car.half
+	# Yalnız araba kendisi oyuncunun üstüne sürerken çarpar. Oyuncunun kendi hızı sayılmaz:
+	# duran / yanaşmayan arabaya oyuncu çarparsa bu duvar çarpmasıdır (kontrolcü halleder)
+	var to_p := player.global_position - car.global_position
+	to_p.y = 0.0
+	var toward := (car.fwd * car.speed).dot(to_p.normalized()) if to_p.length() > 0.01 else 0.0
+	if toward < SkateController.CAR_HIT_SPEED:
+		return
 	if absf(lp.x) < h.x + 0.3 and absf(lp.z) < h.z + 0.3 and lp.y > -0.2 and lp.y < h.y * 2.0 + 0.4:
 		var push := car.fwd * (car.speed * 0.9 + 1.5)
 		# Yandan sıyırdıysa biraz da yana savrulur
