@@ -222,7 +222,9 @@ def build_shell():
         P.box2((x0, fy0, WIN_Z1), (x1, fy1, H), "duvar")             # vitrin üstü
     P.box2((-DOOR_W / 2, fy0, DOOR_H), (DOOR_W / 2, fy1, H), "duvar")
     # Taş kaide (dışta, ön ve yanlar)
-    P.box2((-hw - T - 0.04, -T - 0.04, 0), (hw + T + 0.04, -T + 0.02, 0.45), "tas")
+    for s in (-1, 1):                                   # kapı boşluğunda kaide yok
+        x0, x1 = sorted((s * (hw + T + 0.04), s * (DOOR_W / 2 + 0.09)))
+        P.box2((x0, -T - 0.04, 0), (x1, -T + 0.02, 0.45), "tas")
     P.box2((-hw - T - 0.04, -T, 0), (-hw - T + 0.02, D + T, 0.45), "tas")
     P.box2((hw + T - 0.02, -T, 0), (hw + T + 0.04, D + T, 0.45), "tas")
     P.box2((-hw - T - 0.04, D + T - 0.02, 0), (hw + T + 0.04, D + T + 0.04, 0.45), "tas")

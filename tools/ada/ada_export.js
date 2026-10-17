@@ -372,13 +372,14 @@ const nearestIdx = (r, x, y) => { let b = 0, bd = Infinity; r.pts.forEach((p, i)
 function leftoverCorners(ends) {
   const free = ends.filter((e) => !e.used && e.road !== "ada" && e.road !== "kose");
   const byId = new Map(ROADS.map((r) => [r.id, r]));
-  // Bir ucun kendi yolundaki en yakın kavşağı (40 m içinde)
+  // Bir ucun kendi yolundaki en yakın kavşağı (50 m içinde: dar açılı kavşakta kaldırım
+  // uçları kavşaktan 40 m ötede başlayabiliyor, örn. çevre yolu / etek yolu ayrımı)
   const juncOf = (e) => {
     let best = null;
     for (const j of JUNC) {
       const m = j.members.find((q) => q.r.id === e.road);
       const d = Math.hypot(j.x - e.ix, j.y - e.iy);
-      if (m && d < 40 && (!best || d < best.d)) best = { j, m, d };
+      if (m && d < 50 && (!best || d < best.d)) best = { j, m, d };
     }
     return best;
   };
@@ -441,40 +442,53 @@ function leftoverCorners(ends) {
     // Köşe yuvarlakları
     const plen = (pts) => pts.reduce((u, q, i) => i ? u + Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y) : 0, 0);
     const far = (pts, C, back) => { const seq = back ? pts.slice().reverse() : pts; return seq.find((q) => Math.hypot(q.x - C.x, q.y - C.y) >= 2) || seq[seq.length - 1]; };
-    const chain = [], fills = [];
-    let acute = false, prevT = 0;
-    for (let k = 0; k < pieces.length; k++) {
-      const cur = pieces[k];
-      if (k === pieces.length - 1) { for (const q of cur) if (!chain.length || Math.hypot(q.x - cur[0].x, q.y - cur[0].y) > prevT + 0.05) chain.push(q); break; }
-      const nxt = pieces[k + 1], C = cur[cur.length - 1];
-      const pin = far(cur, C, true), pout = far(nxt, C, false);
-      const lu = Math.hypot(C.x - pin.x, C.y - pin.y) || 1, lv = Math.hypot(pout.x - C.x, pout.y - C.y) || 1;
-      const ux = (C.x - pin.x) / lu, uy = (C.y - pin.y) / lu, vx = (pout.x - C.x) / lv, vy = (pout.y - C.y) / lv;
-      const half = (Math.PI - Math.acos(Math.max(-1, Math.min(1, ux * vx + uy * vy)))) / 2;
-      if (half * 2 < M.rad(70)) acute = true;
-      const tmax = 0.45 * Math.min(plen(cur), plen(nxt));
-      let r = 4, t = r / Math.tan(half);
-      if (t > tmax) { t = tmax; r = t * Math.tan(half); }
-      for (const q of cur) {
-        if (k > 0 && Math.hypot(q.x - cur[0].x, q.y - cur[0].y) <= prevT + 0.05) continue;
-        if (Math.hypot(q.x - C.x, q.y - C.y) <= t + 0.05) continue;
-        chain.push(q);
+    // Çok dar kamada yayın teğeti kıvrılan yol kenarından ayrılıp asfalta girebiliyor:
+    // bordür bir yolun asfaltına girerse yuvarlak küçültülerek (sivri burun) yeniden denenir
+    const rounded = (tk) => {
+      const chain = [], fills = [];
+      let acute = false, prevT = 0;
+      for (let k = 0; k < pieces.length; k++) {
+        const cur = pieces[k];
+        if (k === pieces.length - 1) { for (const q of cur) if (!chain.length || Math.hypot(q.x - cur[0].x, q.y - cur[0].y) > prevT + 0.05) chain.push(q); break; }
+        const nxt = pieces[k + 1], C = cur[cur.length - 1];
+        const pin = far(cur, C, true), pout = far(nxt, C, false);
+        const lu = Math.hypot(C.x - pin.x, C.y - pin.y) || 1, lv = Math.hypot(pout.x - C.x, pout.y - C.y) || 1;
+        const ux = (C.x - pin.x) / lu, uy = (C.y - pin.y) / lu, vx = (pout.x - C.x) / lv, vy = (pout.y - C.y) / lv;
+        const half = (Math.PI - Math.acos(Math.max(-1, Math.min(1, ux * vx + uy * vy)))) / 2;
+        if (half * 2 < M.rad(70)) acute = true;
+        const tmax = 0.45 * Math.min(plen(cur), plen(nxt));
+        let r = 4, t = r / Math.tan(half);
+        if (t > tmax) t = tmax;
+        t *= tk; r = t * Math.tan(half);
+        for (const q of cur) {
+          if (k > 0 && Math.hypot(q.x - cur[0].x, q.y - cur[0].y) <= prevT + 0.05) continue;
+          if (Math.hypot(q.x - C.x, q.y - C.y) <= t + 0.05) continue;
+          chain.push(q);
+        }
+        const T1 = { x: C.x - ux * t, y: C.y - uy * t }, T2 = { x: C.x + vx * t, y: C.y + vy * t };
+        let nx = -uy, ny = ux;
+        if (nx * (vx - ux) + ny * (vy - uy) < 0) { nx = -nx; ny = -ny; }
+        const ox = T1.x + nx * r, oy = T1.y + ny * r;
+        const a0 = Math.atan2(T1.y - oy, T1.x - ox), a1 = Math.atan2(T2.y - oy, T2.x - ox);
+        let da = a1 - a0; while (da > Math.PI) da -= M.TAU; while (da < -Math.PI) da += M.TAU;
+        const n = Math.max(3, Math.ceil(Math.abs(da) * r / 0.7)), arcPts = [];
+        for (let q = 0; q <= n; q++) arcPts.push({ x: ox + Math.cos(a0 + da * q / n) * r, y: oy + Math.sin(a0 + da * q / n) * r, h: C.h });
+        fills.push({ c: [r3(C.x), r3(C.y), r3(C.h)], pts: arcPts.map((q) => [r3(q.x), r3(q.y), r3(q.h)]) });
+        for (const q of arcPts) chain.push(q);
+        prevT = t;
       }
-      const T1 = { x: C.x - ux * t, y: C.y - uy * t }, T2 = { x: C.x + vx * t, y: C.y + vy * t };
-      let nx = -uy, ny = ux;
-      if (nx * (vx - ux) + ny * (vy - uy) < 0) { nx = -nx; ny = -ny; }
-      const ox = T1.x + nx * r, oy = T1.y + ny * r;
-      const a0 = Math.atan2(T1.y - oy, T1.x - ox), a1 = Math.atan2(T2.y - oy, T2.x - ox);
-      let da = a1 - a0; while (da > Math.PI) da -= M.TAU; while (da < -Math.PI) da += M.TAU;
-      const n = Math.max(3, Math.ceil(Math.abs(da) * r / 0.7)), arcPts = [];
-      for (let q = 0; q <= n; q++) arcPts.push({ x: ox + Math.cos(a0 + da * q / n) * r, y: oy + Math.sin(a0 + da * q / n) * r, h: C.h });
-      fills.push({ c: [r3(C.x), r3(C.y), r3(C.h)], pts: arcPts.map((q) => [r3(q.x), r3(q.y), r3(q.h)]) });
-      for (const q of arcPts) chain.push(q);
-      prevT = t;
+      return { chain, fills, acute };
+    };
+    let chain = null, fills = null, acute = false;
+    for (const tk of [1, 0.5, 0.25, 0.1]) {
+      const R = rounded(tk);
+      if (R.chain.length < 3 || plen(R.chain) > 140) break;
+      // Bordür bir yolun asfaltına girmesin
+      if (R.chain.some((q) => { const o = nearestRoad(q.x, q.y); return o && o.e < -0.3; })) continue;
+      ({ chain, fills, acute } = R);
+      break;
     }
-    if (chain.length < 3 || plen(chain) > 140) continue;
-    // Bordür bir yolun asfaltına girmesin
-    if (chain.some((q) => { const o = nearestRoad(q.x, q.y); return o && o.e < -0.3; })) continue;
+    if (!chain) continue;
     let pts;
     const poly = chain.map((q) => [q.x, q.y]);
     if (acute) {
@@ -500,7 +514,7 @@ function leftoverCorners(ends) {
     A.used = B.used = true;
     built.push(A.road + "/" + B.road);
   }
-  if (built.length) console.log("ADA: artakalan köşeler:", built.join(", "));
+  if (built.length) console.log("ADA: artakalan köşeler dolduruldu:", built.join(", "));
 }
 
 // ---------------------------------------------------------------------------
@@ -925,6 +939,124 @@ const data = {
 };
 fs.writeFileSync(path.join(OUT_DIR, "ada.json"), JSON.stringify(data));
 fs.writeFileSync(path.join(OUT_DIR, "trafik.json"), JSON.stringify(TR.trafik));
+// ---------------------------------------------------------------------------
+// Şehir blokları: yollarla çevrili, düz, denize ve tepeye değmeyen alanlar. Oyunda (scripts/sehir/
+// sehir.gd) bunlar varsayılan olarak Arnavut kaldırımıdır (yeşil alanları kullanıcı editörde ekler).
+// assets/ada/bloklar.bin: hücre başına hedef yükseklik (float32, plan y sıralı; -9999 = blok değil).
+// Kenarda (kaldırımın dış kenarı ile blok arasındaki şerit dahil) kaldırım üstüyle aynı hizada,
+// içeride ~6 m'de doğal araziye yumuşar.
+// ---------------------------------------------------------------------------
+const blockH = new Float32Array(N * N).fill(-9999);
+{
+  const comp = new Int32Array(N * N).fill(-1);
+  const comps = [];
+  const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (let s0 = 0; s0 < N * N; s0++) {
+    if (comp[s0] >= 0 || mat[s0] === MAT.ROAD || mat[s0] === MAT.SEA) continue;
+    const id = comps.length, cells = [s0], hs = [];
+    let sea = false;
+    comp[s0] = id;
+    for (let q = 0; q < cells.length; q++) {
+      const k = cells[q], i = k % N, j = (k / N) | 0;
+      hs.push(hCol[k]);
+      for (const [di, dj] of nb) {
+        const ii = i + di, jj = j + dj;
+        if (ii < 0 || jj < 0 || ii >= N || jj >= N) { sea = true; continue; }
+        const kk = jj * N + ii;
+        if (mat[kk] === MAT.SEA) { sea = true; continue; }
+        if (mat[kk] === MAT.ROAD || comp[kk] >= 0) continue;
+        comp[kk] = id;
+        cells.push(kk);
+      }
+    }
+    hs.sort((a, b) => a - b);
+    const p5 = hs[Math.floor(hs.length * 0.05)], p95 = hs[Math.floor(hs.length * 0.95)];
+    comps.push({ cells, ok: !sea && cells.length * STEP * STEP >= 150 && p95 - p5 < 5 && p5 < 10 });
+  }
+  // Kaldırımların dış kenar noktaları ve gerçek üst yükseklikleri (h + bordür): kenar şeridi bunun
+  // biraz altında kalır (yamaç / köşe dönüşlerinde kaldırım yol hizasından alçak olabilir)
+  const edgeGrid = new Map();
+  for (const run of sidewalkRuns) {
+    for (const q of run.pts) {
+      const key = Math.floor(q[2] / 4) + "," + Math.floor(q[3] / 4);
+      if (!edgeGrid.has(key)) edgeGrid.set(key, []);
+      edgeGrid.get(key).push(q);
+    }
+  }
+  const walkTop = (x, y) => {
+    let best = null, bd = 6;
+    const gx = Math.floor(x / 4), gy = Math.floor(y / 4);
+    for (let a = -2; a <= 2; a++) for (let c = -2; c <= 2; c++) {
+      for (const q of edgeGrid.get((gx + a) + "," + (gy + c)) || []) {
+        const d = Math.hypot(q[2] - x, q[3] - y);
+        if (d < bd) { bd = d; best = q; }
+      }
+    }
+    return best ? best[4] + CURB : null;
+  };
+  // Arazi yok sayılır: blok, çevresindeki kaldırımların üstünden DROP kadar alçak bir yüzeydir.
+  // Kenarda bloktan dışarı, kaldırımın altına doğru en çok 3 hücre (asfalta girmeden) aynı
+  // yükseklikte uzanır: kaldırımla blok arasında oluk / çimen kalmaz.
+  const DROP = 0.06;
+  const inBlock = new Uint8Array(N * N);
+  for (const c of comps) if (c.ok) for (const k of c.cells) inBlock[k] = 1;
+  const edge = new Uint8Array(N * N);
+  const src = [];
+  let ring = [];
+  for (let k = 0; k < N * N; k++) if (inBlock[k]) ring.push(k);
+  for (let step = 0; step < 3; step++) {
+    const next = [];
+    for (const k of ring) {
+      const i = k % N, j = (k / N) | 0;
+      for (const [di, dj] of nb) {
+        const ii = i + di, jj = j + dj;
+        if (ii < 0 || jj < 0 || ii >= N || jj >= N) continue;
+        const kk = jj * N + ii;
+        if (inBlock[kk] || edge[kk] || mat[kk] !== MAT.ROAD) continue;
+        const x = -EXT + ii * STEP, y = -EXT + jj * STEP;
+        const nr = nearestRoad(x, y);
+        if (!nr || nr.d < nr.half + 0.4) continue;          // asfaltın üstüne çıkma
+        const top = walkTop(x, y);
+        blockH[kk] = (top !== null ? top : nr.h + CURB) - DROP;
+        edge[kk] = 1;
+        src.push(kk);
+        next.push(kk);
+      }
+    }
+    ring = next;
+  }
+  // İç: kenar yüksekliklerinden pürüzsüz yüzey (en yakın kenarla başla, sonra komşu ortalaması)
+  const q = [], seen = new Uint8Array(N * N);
+  for (const k of src) { seen[k] = 1; q.push(k); }
+  for (let h = 0; h < q.length; h++) {
+    const k = q[h], i = k % N, j = (k / N) | 0;
+    for (const [di, dj] of nb) {
+      const ii = i + di, jj = j + dj;
+      if (ii < 0 || jj < 0 || ii >= N || jj >= N) continue;
+      const kk = jj * N + ii;
+      if (!inBlock[kk] || seen[kk]) continue;
+      seen[kk] = 1;
+      blockH[kk] = blockH[k];
+      q.push(kk);
+    }
+  }
+  const inner = [];
+  for (let k = 0; k < N * N; k++) if (inBlock[k]) { if (!seen[k]) blockH[k] = hCol[k]; inner.push(k); }
+  for (let it = 0; it < 400; it++) {
+    for (const k of inner) {
+      const i = k % N, j = (k / N) | 0;
+      let s0 = 0, n0 = 0;
+      for (const [di, dj] of nb) {
+        const kk = (j + dj) * N + (i + di);
+        if (blockH[kk] > -9000) { s0 += blockH[kk]; n0++; }
+      }
+      if (n0) blockH[k] = s0 / n0;
+    }
+  }
+  console.log(`ŞEHİR BLOKLARI: ${comps.filter((c) => c.ok).length} blok, ${src.length} kenar hücresi`);
+}
+fs.writeFileSync(path.join(OUT_DIR, "bloklar.bin"), Buffer.from(blockH.buffer));
+
 const bin = Buffer.alloc(N * N * 9);
 for (let k = 0; k < N * N; k++) { bin.writeFloatLE(hCol[k], k * 4); bin.writeFloatLE(hVis[k], N * N * 4 + k * 4); bin.writeUInt8(mat[k], N * N * 8 + k); }
 fs.writeFileSync(path.join(OUT_DIR, "ada_h.bin"), bin);

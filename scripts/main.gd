@@ -113,15 +113,19 @@ func _ready() -> void:
 		traffic.count = 0
 	world.add_child(traffic)
 
-	# Test dükkanı (soygun / gizlilik denemesi)
-	if level.has_meta("dukkan"):
-		var shop := Dukkan.new()
-		shop.name = "Dukkan"
-		shop.player = player
-		shop.follow_cam = camera
-		shop.transform = level.get_meta("dukkan")
-		world.add_child(shop)
-		look.add_root(shop)
+	# Şehir: süs binaları, dükkânlar, ara sokaklar, merdivenler, yükseltiler, korkuluklar
+	# (assets/ada/sehir.json; oyun içi editörle düzenlenir). Gövdeleri katman 2'de.
+	player.collision_mask |= Sehir.LAYER
+	var city := Sehir.new()
+	city.name = "Sehir"
+	city.player = player
+	city.follow_cam = camera
+	city.look = look
+	city.ui_parent = self
+	city.level = level
+	if use_island and level.has_meta("dukkan"):
+		city.initial_shop = level.get_meta("dukkan")
+	world.add_child(city)
 
 	var ui := CanvasLayer.new()
 	ui.layer = 2
@@ -131,6 +135,16 @@ func _ready() -> void:
 	var hud := HudScript.new()
 	ui.add_child(hud)
 	hud.setup(player, camera, visual, fx, look, touch)
+
+	# Şehir editörü (bilgisayarda Tab)
+	var editor := SehirEditor.new()
+	editor.name = "SehirEditor"
+	editor.sehir = city
+	editor.world = world
+	editor.player = player
+	editor.follow_cam = camera
+	editor.hide_while_open = [touch, hud]
+	add_child(editor)
 
 
 ## Bir sanal ekran pikselinin gerçek ekranda kaç piksel olacağı.

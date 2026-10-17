@@ -30,6 +30,15 @@ const H := 3.6
 const GLB := preload("res://assets/dukkan/dukkan.glb")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
 const PROP_SCRIPT := preload("res://scripts/ada/prop_katmani.gd")
+const DOKU_SHADER := preload("res://shaders/doku.gdshader")
+const DOKU_ATLAS := preload("res://assets/sehir/dokular.png")
+## Piksel dokulu yüzeyler (şehrin cepheleriyle aynı tarz): malzeme adı -> [karo, karo boyu (m), renk]
+const DOKULU := {
+	"duvar": [0, 1.5, Color.WHITE], "tas": [1, 1.0, Color.WHITE], "tas_koyu": [1, 1.0, Color(0.82, 0.82, 0.82)],
+	"korniz": [2, 0.5, Color.WHITE], "cati": [3, 2.0, Color.WHITE], "duvar_ic": [4, 1.5, Color.WHITE],
+	"lambri": [5, 1.0, Color.WHITE], "tabela": [6, 0.6, Color.WHITE], "ahsap": [7, 0.8, Color.WHITE],
+	"ahsap_koyu": [7, 0.8, Color(0.62, 0.55, 0.5)],
+}
 ## Raf kamerasına geçiş süresi (sn)
 const RAF_GECIS := 0.55
 const KESIF_SURE := 10.0
@@ -45,6 +54,10 @@ const CONE_H := 1.2               # görüş ışınlarının yüksekliği: rafl
 ## Rafın önünden bu kadar uzaktan (m) ürün alınabilir
 const REACH := 1.2
 const LIST_SIZE := 3
+## İç mekân (raflar, ürünler, zürafa) bu mesafeden uzakta çizilmez; dükkân bu kadar uzaktayken
+## görüş alanlarını güncellemez (telefonda kare başına yüzlerce ışın)
+const INSIDE_VIS := 60.0
+const SLEEP_DIST := 45.0
 
 ## Raf seviyeleri (ürün tabanı; dukkan_build.py ile aynı)
 const GONDOLA_Z := [0.14, 0.5, 0.86, 1.22]
@@ -89,6 +102,12 @@ const PROP_COLLIDE := {
 
 var player: SkateController
 var follow_cam: Camera3D
+## Ekran arayüzünün ekleneceği düğüm (ana görüntüde; dünya ayrı bir SubViewport'ta çizilir ve
+## oraya dokunuş gitmez). Verilmezse dükkânın kendisi.
+var ui_parent: Node
+## Tabela yazısı (şehir editöründe dükkân adı)
+var ad := "ZÜRAFA BAKKAL"
+var _layer: CanvasLayer
 
 var faz := Faz.NORMAL
 var _t := 0.0
@@ -188,15 +207,14 @@ func _ready() -> void:
 	_cam.name = "KesifKamerasi"
 	add_child(_cam)
 	_cam.top_level = true
-	var layer := CanvasLayer.new()
-	layer.layer = 3
-	add_child(layer)
-	_ui = Control.new()
+	_layer = CanvasLayer.new()
+	_layer.layer = 3
+	(ui_parent if ui_parent else self).add_child(_layer)
+	_ui = preload("res://scripts/soygun/dukkan_ui.gd").new()
+	_ui.shop = self
 	_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_ui.draw.connect(_draw_ui)
-	_ui.gui_input.connect(_on_ui_input)
-	layer.add_child(_ui)
+	_layer.add_child(_ui)
 	if player:
 		player.context_action.connect(_on_context)
 		player.stow_started.connect(_on_stow_started)
@@ -206,6 +224,8 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if _glb and is_instance_valid(_glb):
 		_glb.free()
+	if _layer and is_instance_valid(_layer) and _layer.get_parent() != self:
+		_layer.queue_free()
 
 
 # ---------- Modeller ve malzemeler ----------
@@ -226,6 +246,15 @@ func _material_for(src: Material) -> Material:
 		sm.albedo_color = Color(c.r, c.g, c.b, 0.28)
 		sm.cull_mode = BaseMaterial3D.CULL_DISABLED
 		m = sm
+	elif DOKULU.has(key):
+		var spec: Array = DOKULU[key]
+		var dm := ShaderMaterial.new()
+		dm.shader = DOKU_SHADER
+		dm.set_shader_parameter("atlas", DOKU_ATLAS)
+		dm.set_shader_parameter("tile", float(spec[0]))
+		dm.set_shader_parameter("meters", float(spec[1]))
+		dm.set_shader_parameter("tint", spec[2])
+		m = dm
 	elif key in ["isik", "led", "ekran", "lamba"]:
 		var sm := StandardMaterial3D.new()
 		sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -269,6 +298,9 @@ func _instance(name: String, xf: Transform3D, parent: Node3D = null) -> MeshInst
 func _collide(size: Vector3, xf: Transform3D, surface := "beton") -> void:
 	var body := StaticBody3D.new()
 	body.set_meta("surface", surface)
+	# Şehir katmanı (Sehir.LAYER): adanın iskeleti değil; editörün çakışma denetimi bunu görmez
+	body.collision_layer = Sehir.LAYER
+	body.collision_mask = 0
 	body.transform = xf
 	var cs := CollisionShape3D.new()
 	var sh := BoxShape3D.new()
@@ -312,7 +344,7 @@ func _build_shell() -> void:
 	_collide(Vector3(W + 0.4, 0.15, D + T * 2), Transform3D(Basis(), Vector3(0, H + 0.075, -D * 0.5)))
 	# Tabela yazısı
 	var sign := Label3D.new()
-	sign.text = "ZÜRAFA BAKKAL"
+	sign.text = ad
 	sign.font_size = 72
 	sign.outline_size = 12
 	sign.modulate = Color(1.0, 0.86, 0.3)
@@ -336,6 +368,7 @@ func _build_furniture() -> void:
 		var name: String = f[0]
 		var xf := _xf(f[1], f[2])
 		var inst := _instance(name, xf)
+		inst.visibility_range_end = INSIDE_VIS
 		_furn.append(inst)
 		if name != "Sepetler":
 			var hull := _outline_node(inst.mesh.get_aabb(), 0.03)
@@ -417,6 +450,7 @@ func _build_products() -> void:
 		var mmi := MultiMeshInstance3D.new()
 		mmi.name = "Urun_" + type
 		mmi.multimesh = mm
+		mmi.visibility_range_end = INSIDE_VIS
 		add_child(mmi)
 		_mm[type] = mm
 
@@ -700,7 +734,7 @@ func _raf_button(k: String) -> void:
 
 
 ## Klavye (bilgisayarda deneme): Enter / boşluk onay, Backspace geri bırak, Esc / F kapat
-func _input(event: InputEvent) -> void:
+func _on_key(event: InputEvent) -> void:
 	if faz != Faz.RAF or not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	match event.physical_keycode:
@@ -712,7 +746,7 @@ func _input(event: InputEvent) -> void:
 			_raf_button("kapat")
 		_:
 			return
-	get_viewport().set_input_as_handled()
+	_ui.get_viewport().set_input_as_handled()
 
 
 ## Elde taşınan ürünün görseli: kök elin altında, ürünün ortası avuçta
@@ -757,6 +791,8 @@ func _build_owner() -> void:
 	add_child(_owner)
 	var model := Npc.build_model(recipe, {})
 	_owner.add_child(model)
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).visibility_range_end = INSIDE_VIS
 	var anim: AnimationPlayer = model.find_child("AnimationPlayer", true, false)
 	_owner_anim = anim
 	if anim:
@@ -824,6 +860,21 @@ func _build_cameras() -> void:
 
 func _physics_process(delta: float) -> void:
 	if not player:
+		return
+	# Uzaktaysa uyu (raflar yalnız elde ürün yokken yenilenir; liste bittiyse yenisi)
+	if faz == Faz.NORMAL and _owner_mode == 0 and _take_t < 0.0 and _put_t < 0.0 \
+			and global_position.distance_to(player.global_position) > SLEEP_DIST:
+		if _held_slot < 0:
+			if not _stolen.is_empty():
+				for i in _stolen:
+					_set_slot_visible(i, true)
+				_stolen.clear()
+			if _list_done:
+				_new_list()
+		if _owns_buttons:
+			_set_buttons([])
+		_light_outline(null)
+		_ui.visible = false
 		return
 	if _owner_mode == 0:
 		_update_owner(delta)

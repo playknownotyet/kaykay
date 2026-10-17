@@ -473,6 +473,9 @@ func _update_floor_surface() -> void:
 			var body := c.get_collider() as Node
 			if body:
 				floor_surface = body.get_meta("surface", "asfalt")
+				# Şehrin boyadığı arazi (bina önleri, ara sokaklar) Arnavut kaldırımı
+				if floor_surface == "cim" and Sehir.instance and Sehir.instance.paved_at(global_position.x, global_position.z):
+					floor_surface = "arnavut"
 			return
 
 

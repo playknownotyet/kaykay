@@ -9,3 +9,7 @@ tests/screens/
 
 # Python önbelleği (Blender betikleri)
 __pycache__/
+
+# Testler ve geçici dosyalar
+tests/tmp/
+/x
