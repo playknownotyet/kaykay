@@ -226,6 +226,10 @@ func _ready() -> void:
 		_armed = true
 		return
 	_marker = _build_marker(Vector3(0, 0, -0.5))
+	# İçeriden kapı boşluğu kapalı: iç mekân boşlukta durur, kapıdan dışarı yürünürse düşülürdü.
+	# Çıkış yalnız koniyle (yükleme ekranı); kapı görsel olarak açılır ama geçilmez.
+	_collide(Vector3(2.0, 2.3, 0.25), Transform3D(Basis(), Vector3(0, 1.15, 0.2)))
+	_armed = true
 	_build_owner()
 	_build_cameras()
 	_new_list()
@@ -926,6 +930,13 @@ func _physics_process(delta: float) -> void:
 		_owner_walk_back(delta)
 	_update_watchers()
 	var lp := to_local(player.global_position)
+	if lp.y < -4.0 and faz == Faz.NORMAL:
+		# Güvenlik ağı: bir şekilde zeminin altına düşüldüyse kapının içine geri koy
+		player.global_position = to_global(Vector3(0, 0.05, -1.3))
+		player.velocity = Vector3.ZERO
+		player.speed = 0.0
+		player.reset_physics_interpolation()
+		return
 	var inside := absf(lp.x) < W * 0.5 - 0.2 and lp.z < -0.3 and lp.z > -D + 0.2 and absf(lp.y) < 2.0
 
 	match faz:
@@ -1205,8 +1216,7 @@ func _outside_step(delta: float) -> void:
 func _exit_step(lp: Vector3) -> bool:
 	var on := absf(lp.x) < 0.8 and lp.z > -0.95 and lp.z < 0.4
 	if not on:
-		if lp.z < -1.7:
-			_armed = true
+		_armed = true
 		return false
 	if not _armed or IcMekan.instance == null or IcMekan.instance.busy:
 		return false

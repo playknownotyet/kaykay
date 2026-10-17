@@ -165,7 +165,7 @@ func _build_ui() -> void:
 	_open_button.focus_mode = Control.FOCUS_NONE
 	# Sol üstteki HUD butonlarının sağında
 	_open_button.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_open_button.offset_left = vh * 0.42
+	_open_button.offset_left = vh * 0.6
 	_open_button.offset_top = vh * 0.06
 	_open_button.pressed.connect(open)
 	_open_button.visible = not OS.has_feature("mobile")

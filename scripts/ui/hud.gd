@@ -15,6 +15,7 @@ var fx: Node
 var look: Node
 var touch_controls: Control
 var _look_button: PixelButton
+var _map_button: PixelButton
 var _look_menu: Control
 var _bag_ui: Control
 
@@ -38,7 +39,7 @@ func setup(p_player: SkateController, p_camera: Node, p_visual: Node, p_fx: Node
 	_capture_defaults()
 	_load()
 	_sync_widgets()
-	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _look_menu, _bag_ui.button])
+	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _look_menu, _bag_ui.button, _map_button])
 	touch_controls.player = player
 	look.changed.connect(func(_n: String): _sync_widgets())
 
@@ -136,6 +137,8 @@ func _process(delta: float) -> void:
 	GuvenliAlan.fit(self)
 	if not player:
 		return
+	# Dükkân içindeyken harita yok (dış dünya yüklü değil)
+	_map_button.visible = not (IcMekan.instance and IcMekan.instance.is_inside())
 	# Telefonda test: FPS'i log'a yaz (bilgisayardan adb logcat ile okunur)
 	if OS.is_debug_build() and OS.has_feature("mobile"):
 		_fps_log_timer += delta
@@ -180,6 +183,11 @@ func _build() -> void:
 	_respawn_button = _icon_button("basa", Vector2(m + (b + m * 0.5), m), b)
 	_respawn_button.pressed.connect(func(): player.respawn(); camera.snap())
 	_look_button = _icon_button("goz", Vector2(m + (b + m * 0.5) * 2.0, m), b)
+	# Harita (navigasyon): hedef koymak için
+	_map_button = _icon_button("harita", Vector2(m + (b + m * 0.5) * 3.0, m), b)
+	_map_button.pressed.connect(func():
+		if Navigasyon.instance:
+			Navigasyon.instance.open_map())
 	_look_menu = preload("res://scripts/ui/gorunum_menusu.gd").new()
 	_look_menu.look = look
 	add_child(_look_menu)

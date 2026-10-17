@@ -146,6 +146,16 @@ func _ready() -> void:
 	ui.add_child(hud)
 	hud.setup(player, camera, visual, fx, look, touch)
 
+	# Navigasyon: harita ve hedef işareti (HUD'un altında, hedef işareti dünyanın üstünde)
+	var nav := Navigasyon.new()
+	nav.name = "Navigasyon"
+	nav.player = player
+	nav.camera = camera
+	nav.world = world
+	nav.touch_controls = touch
+	ui.add_child(nav)
+	ui.move_child(nav, 0)
+
 	# Şehir editörü (bilgisayarda Tab)
 	var editor := SehirEditor.new()
 	editor.name = "SehirEditor"
@@ -153,7 +163,7 @@ func _ready() -> void:
 	editor.world = world
 	editor.player = player
 	editor.follow_cam = camera
-	editor.hide_while_open = [touch, hud]
+	editor.hide_while_open = [touch, hud, nav]
 	add_child(editor)
 
 

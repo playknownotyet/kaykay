@@ -180,6 +180,13 @@ func _on_press(index: int, pos: Vector2) -> void:
 		_update_joystick()
 
 
+## Bütün dokunuşları bırak (harita açılıp kapanınca: oyun dururken kaçan bırakma olayları)
+func release_all() -> void:
+	for index in _touches.keys():
+		_on_release(index)
+	_pressed.clear()
+
+
 func _on_release(index: int) -> void:
 	if not _touches.has(index):
 		return
