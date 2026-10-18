@@ -113,6 +113,14 @@ func _ready() -> void:
 		traffic.count = 0
 	world.add_child(traffic)
 
+	# Kaykay ve çevre sesleri (Ortam yolu; kulaklık takılıyken bastırılır)
+	var sounds := KaykaySes.new()
+	sounds.name = "Sesler"
+	sounds.player = player
+	sounds.feedback = feedback
+	sounds.traffic = traffic
+	world.add_child(sounds)
+
 	# Şehir: süs binaları, dükkânlar, ara sokaklar, merdivenler, yükseltiler, korkuluklar
 	# (assets/ada/sehir.json; oyun içi editörle düzenlenir). Gövdeleri katman 2'de.
 	player.collision_mask |= Sehir.LAYER
@@ -180,7 +188,10 @@ func set_pixel_size(value: float) -> void:
 
 
 func _build_world_view() -> void:
+	SesAyar.setup()
 	world = SubViewport.new()
+	# 3D sesler (korna) bu görüntünün kamerasından duyulur
+	world.audio_listener_enable_3d = true
 	world.name = "World"
 	world.msaa_3d = Viewport.MSAA_DISABLED
 	world.render_target_update_mode = SubViewport.UPDATE_ALWAYS

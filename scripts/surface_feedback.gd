@@ -32,6 +32,8 @@ const GRIND := {
 ## Kameranın okuyacağı değerler
 var camera_rumble := 0.0            # sürekli titreme genliği (m)
 signal bump(strength: float)        # tek bir sekme (taş, iniş, çarpma)
+## Titreşimle birlikte çalınan "tık" (taş, derz, itiş): şiddet 0..1 (KaykaySes)
+signal tick(strength: float)
 
 var controller: SkateController
 var _dist := 0.0
@@ -87,6 +89,7 @@ func _physics_process(delta: float) -> void:
 				_next_bump = r.spacing * _rng.randf_range(0.7, 1.3)
 				var k := _rng.randf_range(1.0 - r.vary, 1.0)
 				Haptics.pulse(14, r.amp * maxf(sf, 0.3) * k)
+				tick.emit(r.amp * maxf(sf, 0.3) * k * 2.0)
 				if r.bump > 0.0:
 					bump.emit(r.bump * maxf(sf, 0.3) * k)
 		rumble = r.cam * sf
@@ -106,6 +109,7 @@ func _brake_and_push(speed: float, delta: float) -> void:
 	var contact: bool = inp.foot_contact and (inp.gesture == SkateInput.Gesture.PUSH or inp.gesture == SkateInput.Gesture.REVERSE)
 	if contact and not _prev_contact:
 		Haptics.pulse(10, 0.2)
+		tick.emit(0.35)
 	_prev_contact = contact
 
 

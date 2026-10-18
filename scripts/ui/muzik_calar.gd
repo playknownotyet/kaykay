@@ -66,6 +66,7 @@ func _ready() -> void:
 	# Oyun içi radyonun sesi (Apple Music telefonun Müzik uygulamasından çalar, bu düğüm kullanılmaz)
 	_radio = AudioStreamPlayer.new()
 	_radio.name = "Radyo"
+	_radio.bus = SesAyar.RADYO
 	add_child(_radio)
 	servis.set_radio_player(_radio)
 	_layout()
