@@ -4,8 +4,8 @@
 
 Ölçü gerçek boyut (metre): 62 x 104 x 11 mm. Ön yüz Blender -Y (Godot +Z), üst kenar +Z (Godot +Y).
 Godot düğümleri adlarıyla bulur:
-  "Govde"     ön yüz (beyaz parlak), arka ve yanlar (krom), üstte kulaklık girişi ve kilit düğmesi,
-              köşede küçük kaykay çıkartması (beyaz kesim kenarlı)
+  "Govde"     ön yüz (beyaz parlak), arka ve yanlar (krom), üstte kulaklık girişi ve kilit düğmesi
+              (çıkartma yok: oyunda katman olarak eklenir)
   "Ekran"     ekran camı: UV 0..1 (320 x 240 oranında), oyunda canlı görüntü dokusu basılır
   "Tekerlek"  tıklama tekerleği ve üstündeki işaretler (MENU, geri, ileri, oynat / durdur)
   "OrtaTus"   ortadaki düğme (tekrar / döngü)
@@ -151,43 +151,7 @@ SCR_W, SCR_H = 50 * MM, 37.5 * MM
 SCR_CZ = 23 * MM
 prism(bm, rounded_rect(0, SCR_CZ, SCR_W + 3 * MM, SCR_H + 3 * MM, 2.0 * MM, 4), FRONT_Y - 0.15 * MM, FRONT_Y + 0.05 * MM, BEZEL)
 
-# ---------- Kaykay çıkartması (sol alt köşe, eğik; beyaz kesim kenarı) ----------
-def stadium(cx, cz, L, Hh, seg=8):
-    r = Hh * 0.5
-    pts = []
-    for k in range(seg + 1):
-        a = math.radians(90 + 180 * k / seg)
-        pts.append((cx - (L * 0.5 - r) + math.cos(a) * r, cz + math.sin(a) * r))
-    for k in range(seg + 1):
-        a = math.radians(270 + 180 * k / seg)
-        pts.append((cx + (L * 0.5 - r) + math.cos(a) * r, cz + math.sin(a) * r))
-    return pts
-
-
-def rot(pts, cx, cz, deg):
-    a = math.radians(deg)
-    out = []
-    for (x, z) in pts:
-        dx, dz = x - cx, z - cz
-        out.append((cx + dx * math.cos(a) - dz * math.sin(a), cz + dx * math.sin(a) + dz * math.cos(a)))
-    return out
-
-
-SX, SZ, SA = -19.5 * MM, -44.5 * MM, 18.0
-y_st = FRONT_Y - 0.12 * MM
-prism(bm, rot(stadium(SX, SZ, 19 * MM, 7.2 * MM), SX, SZ, SA), y_st, FRONT_Y + 0.01 * MM, (1.0, 1.0, 1.0))
-# Tahta (turuncu) ve kenar şeridi (sarı), kalkık uçlar
-prism(bm, rot(stadium(SX, SZ, 16.5 * MM, 4.6 * MM), SX, SZ, SA), y_st - 0.06 * MM, y_st, (0.98, 0.45, 0.12))
-prism(bm, rot(stadium(SX, SZ, 13 * MM, 1.4 * MM), SX, SZ, SA), y_st - 0.1 * MM, y_st - 0.06 * MM, (1.0, 0.86, 0.25))
-# Tekerlekler (yeşil) ve trucklar (gri)
-for (dx, dz) in ((-4.6, -2.7), (4.6, -2.7), (-4.6, 2.7), (4.6, 2.7)):
-    cx, cz = rot([(SX + dx * MM, SZ + dz * MM)], SX, SZ, SA)[0]
-    circle = [(cx + math.cos(a) * 1.15 * MM, cz + math.sin(a) * 1.15 * MM) for a in [k / 10 * math.tau for k in range(10)]]
-    prism(bm, circle, y_st - 0.14 * MM, y_st - 0.04 * MM, (0.35, 0.85, 0.55))
-for dx in (-4.6, 4.6):
-    pts = [(SX + (dx - 0.6) * MM, SZ - 3.2 * MM), (SX + (dx + 0.6) * MM, SZ - 3.2 * MM),
-           (SX + (dx + 0.6) * MM, SZ + 3.2 * MM), (SX + (dx - 0.6) * MM, SZ + 3.2 * MM)]
-    prism(bm, rot(pts, SX, SZ, SA), y_st - 0.11 * MM, y_st - 0.05 * MM, (0.6, 0.62, 0.66))
+# Çıkartmalar modelde değil: oyunda katman olarak eklenir (scripts/ui/cihaz_sticker.gd)
 
 mesh_obj("Govde", bm)
 

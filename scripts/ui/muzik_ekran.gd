@@ -15,7 +15,23 @@ func _draw() -> void:
 	var W := size.x
 	var H := size.y
 	draw_rect(Rect2(0, 0, W, H), BG)
-	if calar == null or calar.st.is_empty():
+	if calar == null:
+		return
+	# Kapalı: kararmış cam (hafif yansıma). Açılırken: kısa açılış yazısı
+	if not calar.player or not calar.player.music_power:
+		draw_rect(Rect2(0, 0, W, H), Color(0.06, 0.07, 0.09))
+		draw_colored_polygon(PackedVector2Array([Vector2(W * 0.55, 0), Vector2(W, 0), Vector2(W, H * 0.45)]), Color(1, 1, 1, 0.04))
+		return
+	if calar.boot_t > 0.0:
+		var k := clampf((1.1 - calar.boot_t) / 0.35, 0.0, 1.0)
+		draw_rect(Rect2(0, 0, W, H), Color(0.97, 0.97, 0.98).lerp(Color(0.06, 0.07, 0.09), 1.0 - k))
+		var logo := "KAYPOD"
+		PixelArt.draw_text(self, logo, Vector2((W - PixelArt.text_width(logo, 6.0)) * 0.5, H * 0.38), 6.0, Color(0.12, 0.12, 0.16, k))
+		var bar := Rect2(W * 0.3, H * 0.66, W * 0.4, 8)
+		draw_rect(bar, Color(0.8, 0.81, 0.84, k))
+		draw_rect(Rect2(bar.position, Vector2(bar.size.x * clampf((1.1 - calar.boot_t) / 1.0, 0.0, 1.0), bar.size.y)), Color(0.25, 0.5, 0.9, k))
+		return
+	if calar.st.is_empty():
 		return
 	var st: Dictionary = calar.st
 	if calar.menu_open:

@@ -994,9 +994,9 @@ func take_back(items: Array) -> void:
 
 # ---------- Bağlam eylemleri ----------
 
-## Müzik çalar butonu. Yayayken: kaykayı yanına diker, cepten çıkarır; cihaz kapalıysa (güç) açar ve
-## kulaklıkları takar, açıksa kulaklıklar zaten kulakta, yalnız çıkarıp bakar. Butona ya da MENU'ye
-## yeniden basınca cebine koyar (cihaz açık kalır, müzik sürer). Kaykaydayken animasyon yok.
+## Müzik çalar butonu. Yayayken: kaykayı yanına diker, cepten çıkarır; kulaklıklar takılı değilse
+## takar, takılıysa yalnız çıkarıp bakar. Cihaz güç düğmesiyle açılır / kapanır (set_music_power).
+## Butona yeniden basınca cebine koyar (açıksa müzik sürer). Kaykaydayken animasyon yok.
 func toggle_music() -> void:
 	if fall_time > 0.0 or held_in_air or sitting or input_locked or board_anim != BoardAnim.NONE:
 		return
@@ -1010,20 +1010,28 @@ func toggle_music() -> void:
 		return
 	if bag_open or held_item != "" or (on_foot and action_time > 0.0):
 		return
+	# Kulaklıklar kulakta değilse önce takar; cihaz çıkınca kapalıdır (güç düğmesiyle açılır)
 	if on_foot:
-		if music_power:
+		if earbuds_in:
 			play_action("muzik_cikar_kisa", MUZIK_KISA_TIME)
 		else:
 			play_action("muzik_cikar", MUZIK_CIKAR_TIME)
 	music_open = true
-	music_power = true
 	earbuds_in = true
 	music_changed.emit(true)
 
 
-## Güç düğmesi: cihazı kapatır; yayayken kulaklıkları çıkarır, cihazı cebe koyar, kaykayı alır
-func music_power_off() -> void:
-	if not music_power or (on_foot and action_time > 0.0):
+## Güç düğmesi (cihaz elde): açar (ekran açılır, şarkı kendiliğinden başlamaz) ya da kapatır
+## (müzik durur, ekran kararır; kulaklıkları çıkarıp cebe koyma MuzikCalar'dan biraz sonra gelir)
+func set_music_power(on: bool) -> void:
+	if on == music_power:
+		return
+	music_power = on
+
+
+## Kapatıldıktan sonra: yayayken kulaklıkları çıkarır, cihazı cebe koyar, kaykayı alır
+func music_put_away_off() -> void:
+	if on_foot and action_time > 0.0:
 		return
 	music_power = false
 	earbuds_in = false
