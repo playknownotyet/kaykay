@@ -16,10 +16,10 @@ const GLB := preload("res://assets/muzikcalar/muzikcalar.glb")
 const VC_SHADER := preload("res://shaders/toon_vc.gdshader")
 const SCR_SIZE := Vector2i(320, 240)
 ## Cihazın ekrandaki kutusu (ekran yüksekliğine göre): alt ortada
-const BOX_H := 0.40
-const BOX_W := 0.43
+const BOX_H := 0.60
+const BOX_W := 0.645
 ## Cihazın üstünde kablonun yükselip silindiği boşluk (görüntü bu kadar uzar, dokunuşu almaz)
-const CABLE_H := 0.2
+const CABLE_H := 0.3
 const FOV := 22.0
 const CAM_D := 0.285
 

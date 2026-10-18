@@ -1,12 +1,15 @@
 """Geçici sesler (sentez): asıl kayıtlar gelene kadar. Çıktı: assets/ses/*.wav (mono, 22050 Hz, 16 bit)
 
-  python tools/ses/gecici_sesler.py
+  python tools/ses/gecici_sesler.py            (yalnız eksik sesleri üretir)
+  python tools/ses/gecici_sesler.py --hepsi    (hepsini yeniden üretir: kendi koyduğun sesleri EZER)
 
 Aynı adla gerçek bir kayıt koyunca (wav / ogg) oyun onu çalar (scripts/ses/ses_ayar.gd'de adlar).
+Var olan dosyalar varsayılan olarak korunur: kendi kayıtların üzerine yazılmaz.
 Döngüler (ruzgar, tekerlek_*, surtunme_*, grind, sehir) baştan sona kesintisiz döner.
 """
 import math
 import os
+import sys
 import wave
 
 import numpy as np
@@ -17,7 +20,15 @@ os.makedirs(OUT, exist_ok=True)
 rng = np.random.default_rng(7)
 
 
+HEPSI = "--hepsi" in sys.argv
+
+
 def save(name, x, peak=0.85):
+    path = os.path.join(OUT, name + ".wav")
+    others = [os.path.join(OUT, name + e) for e in (".ogg", ".mp3")]
+    if not HEPSI and (os.path.exists(path) or any(os.path.exists(o) for o in others)):
+        print("%-16s var, korunuyor" % name)
+        return
     x = np.asarray(x, dtype=np.float64)
     m = np.max(np.abs(x)) or 1.0
     x = x / m * peak
