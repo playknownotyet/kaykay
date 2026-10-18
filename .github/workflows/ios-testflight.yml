@@ -94,6 +94,45 @@ jobs:
           sudo xcode-select -s "$xcode"
           xcodebuild -version
 
+      # Apple Music eklentisi (native/apple_muzik, GDExtension): oyunun müzik çaları telefonun Müzik
+      # uygulamasını yönetir. godot-cpp indirilir ve önbelleğe alınır (ilk seferde ~5 dk, sonra hızlı).
+      - name: godot-cpp önbelleği
+        uses: actions/cache@v4
+        with:
+          path: native/apple_muzik/godot-cpp
+          key: godot-cpp-4.4-ios-arm64-v1
+
+      - name: Apple Music eklentisini derle
+        run: |
+          pip3 install --quiet --break-system-packages scons || pip3 install --quiet scons
+          cd native/apple_muzik
+          if [ ! -d godot-cpp/.git ]; then
+            rm -rf godot-cpp
+            git clone --depth 1 --branch 4.4 https://github.com/godotengine/godot-cpp.git godot-cpp
+          fi
+          scons platform=ios arch=arm64 target=template_release -j"$(sysctl -n hw.ncpu)"
+          # Eklenti + godot-cpp tek statik kütüphane: uygulamaya gömülecek çerçeve yok
+          cpp_lib="$(ls godot-cpp/bin/libgodot-cpp.ios.template_release*.a | grep -v simulator | head -1)"
+          echo "godot-cpp: $cpp_lib"
+          libtool -static -o bin/libmuzik_birlesik.a bin/libapple_muzik.ios.template_release.a "$cpp_lib"
+          out="$GITHUB_WORKSPACE/addons/apple_muzik/ios"
+          rm -rf "$out" && mkdir -p "$out"
+          xcodebuild -create-xcframework -library bin/libmuzik_birlesik.a \
+            -output "$out/libapple_muzik.ios.template_release.xcframework"
+          # .gdextension yalnız iOS derlemesinde yazılır (bilgisayarda / Android'de yok: hata vermesin)
+          cat > "$GITHUB_WORKSPACE/addons/apple_muzik/apple_muzik.gdextension" <<'EOF'
+          [configuration]
+          entry_symbol = "apple_muzik_init"
+          compatibility_minimum = "4.4"
+
+          [libraries]
+          ios.debug = "res://addons/apple_muzik/ios/libapple_muzik.ios.template_release.xcframework"
+          ios.release = "res://addons/apple_muzik/ios/libapple_muzik.ios.template_release.xcframework"
+          EOF
+          sed -i '' 's/^          //' "$GITHUB_WORKSPACE/addons/apple_muzik/apple_muzik.gdextension"
+          cat "$GITHUB_WORKSPACE/addons/apple_muzik/apple_muzik.gdextension"
+          ls -la "$out"
+
       - name: Godot ile Xcode projesini dışa aktar
         run: |
           # Deneme modunda gerçek Team ID yok; Godot boş kabul etmediği için yer tutucu kullanılır.
@@ -179,7 +218,8 @@ jobs:
             CODE_SIGN_IDENTITY="$SIGN_SHA1" \
             PROVISIONING_PROFILE="$PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
-            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN"
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN" \
+           
 
       - name: .ipa oluştur (xcodebuild -exportArchive)
         if: inputs.mod != 'deneme'

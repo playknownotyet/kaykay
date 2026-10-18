@@ -31,6 +31,8 @@ const BOLME := 3.0
 ## Şehir gövdelerinin çarpışma katmanı (zemin ışınları katman 1'e bakar: adanın kendisi)
 const LAYER := 2
 const VC_SHADER := preload("res://shaders/toon_vc.gdshader")
+## Çimen dokusu (tools/sehir/cim_doku.py); arazi gölgelendiricisine verilir
+const GRASS_TEX := preload("res://assets/ada/cim.png")
 ## Sıradan bina stilleri (cephe atlası sütunları 0-15; tools/sehir/cephe_atlas.py)
 const STIL_ADLARI := ["Pembe", "Nane", "Krem", "Tuğla", "Lavanta", "Hardal", "Mavi", "Beton",
 	"Terrakota", "Ahşap kaplama", "Sarı tuğla", "Somon", "Zeytin", "Gece mavisi", "Kesme taş", "Şeftali"]
@@ -216,6 +218,8 @@ func _terrain_init() -> bool:
 			if mat:
 				mat.set_shader_parameter("pave_mask", _mask_tex)
 				mat.set_shader_parameter("pave_rect", rect)
+				mat.set_shader_parameter("grass_tex", GRASS_TEX)
+				mat.set_shader_parameter("grass_strength", 1.0)
 			if String(c.name).begins_with("Arazi_"):
 				var p := mi.position
 				_chunks.append({"mi": mi, "arrays": mi.mesh.surface_get_arrays(0), "rect": Rect2(p.x - 66.0, p.z - 66.0, 132.0, 132.0)})
@@ -705,6 +709,8 @@ var _mask_base: Image                   # blokların boyası (açılışta bir k
 var _block_cells := {}                  # blok hücreleri (yükseklik haritası indisi): ara sokak bozmasın
 ## Kaykayın yüzey hissi için (boyalı arazi = Arnavut kaldırımı)
 static var instance: Sehir
+## Yeniden kurulunca (editör): zemin düzleşmiş olabilir; peyzaj yüksekliklerini yeniler
+signal rebuilt
 var _mask: Image
 var _mask_tex: ImageTexture
 var _mask_n := 0
@@ -991,6 +997,7 @@ func rebuild() -> void:
 	_sdet = null
 	if look and look.has_method("add_root"):
 		look.add_root(_built)
+	rebuilt.emit()
 
 
 func _commit(st: SurfaceTool, mat: Material, name: String, vis := 0.0, shadow := true) -> void:

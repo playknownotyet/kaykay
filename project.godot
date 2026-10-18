@@ -15,6 +15,11 @@ config/description="Mobil kaykay + stealth oyunu prototipi"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 
+[audio]
+
+general/ios/session_category=0
+general/ios/mix_with_others=true
+
 [autoload]
 
 SkateInput="*res://scripts/skate_input.gd"

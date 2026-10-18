@@ -42,6 +42,10 @@ var move_vector := Vector2.ZERO  # joystick (x sağ, y ileri); yürüme için de
 ## Yayayken kamera joystick'i (x sağa dön, y yukarı bak), ölü bölge ve eğri uygulanmış
 var cam_stick := Vector2.ZERO
 var _cam_raw := Vector2.ZERO
+## Yayayken ekranda parmakla kamera çevirme: biriken kayma (ekran yüksekliği oranı); kamera her kare okur
+var _cam_drag := Vector2.ZERO
+## Kaykaydayken bakış joystick'i: x -1 sola .. +1 sağa, y -1 aşağı .. +1 yukarı bak (bırakınca 0)
+var peek := Vector2.ZERO
 var gesture: int = Gesture.NONE
 var push_progress := 0.0         # 0..1 itme vuruşunun neresindeyiz (ayak animasyonu)
 var foot_contact := false        # ayak şu an yere basıp itiyor mu
@@ -138,6 +142,20 @@ func consume_board_toggle() -> bool:
 
 func set_cam_stick(v: Vector2) -> void:
 	_cam_raw = v.limit_length(1.0)
+
+
+func add_cam_drag(d: Vector2) -> void:
+	_cam_drag += d
+
+
+func consume_cam_drag() -> Vector2:
+	var d := _cam_drag
+	_cam_drag = Vector2.ZERO
+	return d
+
+
+func set_peek(v: Vector2) -> void:
+	peek = v.limit_length(1.0)
 
 
 ## Arabanın arkasına tutun / bırak

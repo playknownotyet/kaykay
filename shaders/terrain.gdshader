@@ -18,6 +18,12 @@ uniform vec3 grout : source_color = vec3(0.32, 0.3, 0.31);
 uniform vec2 stone_size = vec2(0.16, 0.12);
 uniform float grout_width = 0.012;
 
+// Çimen dokusu (tools/sehir/cim_doku.py): çarpan dokusu, 0.5 = 1.0. Köşe rengi yeşil olan yerlere
+// (çimen) iki ölçekte işlenir; büyük ölçekli benekler çimenin yer yer gür / kurumsu durmasını sağlar.
+uniform sampler2D grass_tex : filter_nearest_mipmap, repeat_enable, hint_default_white;
+uniform float grass_tile = 2.2;            // doku kaç metrede bir tekrarlar
+uniform float grass_strength = 0.0;         // doku verilince 1 (scripts/sehir/sehir.gd)
+
 varying vec3 world_pos;
 
 float hash2(vec2 p) {
@@ -45,6 +51,24 @@ vec3 cobble(vec2 xz) {
 	return mix(near_col, avg, far_k);
 }
 
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x), mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+vec3 grass(vec3 col, vec2 xz) {
+	vec3 t1 = texture(grass_tex, xz / grass_tile).rgb * 2.0;
+	vec2 r = vec2(xz.x * 0.8 - xz.y * 0.6, xz.x * 0.6 + xz.y * 0.8);
+	vec3 t2 = texture(grass_tex, r / (grass_tile * 1.7) + 0.37).rgb * 2.0;
+	vec3 d = mix(t1, t2, 0.4);
+	// Büyük benekler: gür (koyu, mavimsi) / kurumsu (açık, sarımsı)
+	float m = vnoise(xz / 16.0) * 0.65 + vnoise(xz / 5.0) * 0.35;
+	vec3 tone = mix(vec3(0.86, 0.94, 0.9), vec3(1.12, 1.06, 0.82), smoothstep(0.25, 0.8, m));
+	return col * mix(vec3(1.0), d * tone, grass_strength);
+}
+
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	POSITION = snap_clip(PROJECTION_MATRIX * MODELVIEW_MATRIX * vec4(VERTEX, 1.0), VIEWPORT_SIZE);
@@ -52,6 +76,11 @@ void vertex() {
 
 void fragment() {
 	vec3 col = COLOR.rgb;
+	// Çimen: köşe rengi yeşilse (kum, kaya, toprak, şev değil)
+	float gk = smoothstep(0.12, 0.35, (col.g - max(col.r, col.b)) / max(col.g, 0.01));
+	if (gk > 0.0) {
+		col = mix(col, grass(col, world_pos.xz), gk);
+	}
 	if (pave_rect.z > 0.0) {
 		float m = texture(pave_mask, (world_pos.xz - pave_rect.xy) / pave_rect.zw).r;
 		float k = smoothstep(0.42, 0.58, m);

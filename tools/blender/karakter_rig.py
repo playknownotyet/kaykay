@@ -325,6 +325,9 @@ def apply_pose(arm_obj, pose):
             pb[bone].rotation_euler = [math.radians(a) for a in pose[key]]
     if "board" in pose:
         pb["board"].location = to_local(arm_obj, "board", pose["board"])
+    if "board_raw" in pose:
+        pb["board"].location = Vector(pose["board_raw"][0])
+        pb["board"].rotation_euler = pose["board_raw"][1]
     for sfx in ("L", "R"):
         if f"foot.{sfx}" in pose:
             set_target(arm_obj, f"ik_foot.{sfx}", pose[f"foot.{sfx}"])
@@ -697,6 +700,215 @@ def gait_pose(u, g, side_x=0.1):
         out[f"foot.{sfx}"] = (side_x * side, y, 0.075 + z)
         out[f"foot_rot.{sfx}"] = (pitch, 0, 0)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Müzik çalar: cepten çıkarma, kulaklıkları takma, bakma, cebe koyma
+# Kaykay önce sağ yana, kenarı üstünde yere bırakılır (iki el boşta), sonunda geri alınır.
+# Cihaz ve kulaklıklar karakterin parçası (kemiklere bağlı ayrı meshler; Godot görünürlüğünü
+# animasyona göre açar): "Calar_L" / "Calar_R" elde, "Tomurcuk_El_L/R" parmak ucunda,
+# "Tomurcuk_Kulak_L/R" kulakta. Kablo uç noktaları için kemikler: jack.L/R (cihazın girişi),
+# kulak.L/R, kulaklik_el.L/R, cep.L (sol ön cep), ayirac (göğsün önünde kablonun ayrıldığı yer).
+# ---------------------------------------------------------------------------
+MUZIK_GLB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "muzikcalar", "muzikcalar.glb")
+CALAR_SCALE = 1.5
+BUD_SCALE = 1.7
+HOLD_L = (0.06, -0.3, 0.97)
+HOLD_R = (-0.06, -0.3, 0.97)
+POCKET_L = (0.15, -0.075, 0.71)
+DEVICE_TOP = (0.0, -0.36, 1.07)
+EAR_HAND_L = (0.175, -0.05, 1.2)
+EAR_HAND_R = (-0.175, -0.05, 1.2)
+EAR_L = Vector((0.118, 0.005, 1.275))
+EAR_R = Vector((-0.118, 0.005, 1.275))
+BOARD_DOWN_HAND = None          # add_music_bones hesaplar (STAND_HAND_R'nin altı)
+MUZIK_FRAMES = 80               # cikar: Godot MUZIK_CIKAR_TIME = 80 / 30
+MUZIK_KOY_FRAMES = 34
+# Animasyonda olaylar (kare): Godot muzik_aksesuar.gd ile aynı
+MZ_CEPTEN = 22          # cihaz sol elde görünür
+MZ_SAG_AL = 36          # sağ kulaklık sağ elde
+MZ_SAG_TAK = 46         # sağ kulaklık kulakta
+MZ_EL_DEGIS = 56        # cihaz sağ ele geçer
+MZ_SOL_AL = 60          # sol kulaklık sol elde
+MZ_SOL_TAK = 68         # sol kulaklık kulakta
+MZ_IKI_EL = 76          # cihaz yeniden sol elde (iki el tutar)
+MUZIK_KISA_FRAMES = 36          # muzik_cikar_kisa (kulaklıklar zaten takılı)
+# muzik_kulaklik_cikar (güç kapatma): kareler, Godot muzik_aksesuar.gd ile aynı
+KC_SAG_KULAK = 8        # sağ el kulakta
+KC_SAG_CEK = 12         # sağ kulaklık elde (çekildi)
+KC_SAG_BIT = 19         # sağ el cihazda: kulaklık sarılıp gizlenir
+KC_EL_DEGIS = 20        # cihaz sağ ele
+KC_SOL_KULAK = 27
+KC_SOL_CEK = 31
+KC_SOL_BIT = 38
+KC_IKI_EL = 39          # cihaz sol ele
+KC_CEBE = 50            # cihaz cepte (gizlenir)
+MUZIK_KC_FRAMES = 72
+
+
+def music_hold_pose(**over):
+    p = stand_pose(carry=0.0, head_rot=(24, 0, 0), neck_rot=(8, 0, 0), spine_rot=(4, 0, 0), **over)
+    p["hand.L"], p["hand_rot.L"], p["elbow.L"] = HOLD_L, (-60, 0, 22), (0.34, 0.22, 0.74)
+    p["hand.R"], p["hand_rot.R"], p["elbow.R"] = HOLD_R, (-60, 0, -22), (-0.34, 0.22, 0.74)
+    return p
+
+
+def device_matrix(center):
+    """Cihaz göğsün önünde, ekranı yüze dönük (model: ön -Y, üst +Z), CALAR_SCALE büyük."""
+    eye = Vector((0, -0.1, 1.31))
+    n = (eye - Vector(center)).normalized()          # ekranın baktığı yön
+    up = Vector((0, -n.z, n.y)).normalized()         # cihazın üstü (n'ye dik, öne-yukarı)
+    y_ax = -n
+    x_ax = y_ax.cross(up).normalized()
+    m = Matrix((x_ax, y_ax, up)).transposed().to_4x4()
+    m.translation = Vector(center)
+    return m @ Matrix.Diagonal((CALAR_SCALE, CALAR_SCALE, CALAR_SCALE, 1.0))
+
+
+def bud_matrix(ear, side):
+    """Kulak içi: ızgara (model -Y) içe, boyun (+Z) aşağı."""
+    inward = Vector((-side, 0, 0))
+    y_ax = -inward
+    z_ax = Vector((0, 0.15, -1.0)).normalized()
+    x_ax = y_ax.cross(z_ax).normalized()
+    z_ax = x_ax.cross(y_ax).normalized()
+    m = Matrix((x_ax, y_ax, z_ax)).transposed().to_4x4()
+    m.translation = ear
+    return m @ Matrix.Diagonal((BUD_SCALE, BUD_SCALE, BUD_SCALE, 1.0))
+
+
+def _new_child_bone(arm_obj, name, parent, matrix_arm):
+    """matrix_arm: kemiğin dinlenme matrisi (iskelet uzayı, ölçeksiz)."""
+    bpy.context.view_layer.objects.active = arm_obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = arm_obj.data.edit_bones
+    b = eb.new(name)
+    b.head = (0, 0, 0)
+    b.tail = (0, 0.04, 0)
+    m = matrix_arm.normalized()
+    b.matrix = m
+    b.parent = eb[parent]
+    b.use_deform = True
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def _helper_rest(arm_obj, pose, parent, desired):
+    """Pozdaki ebeveyn kemiğe göre: o pozda 'desired' (iskelet uzayı) yerinde duran çocuğun dinlenmesi."""
+    apply_pose(arm_obj, pose)
+    bpy.context.view_layer.update()
+    pp = arm_obj.pose.bones[parent].matrix.copy()
+    pr = arm_obj.data.bones[parent].matrix_local.copy()
+    return pr @ pp.inverted() @ desired
+
+
+def _import_music_meshes():
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=MUZIK_GLB)
+    new = [o for o in bpy.data.objects if o not in before]
+    found = {o.name.split(".")[0]: o for o in new if o.type == 'MESH'}
+    for o in new:
+        if o.type != 'MESH':
+            bpy.data.objects.remove(o, do_unlink=True)
+    return found
+
+
+def _skinned_copy(src_objs, name, bone, rest_m, arm_obj):
+    """Kaynak meshleri birleştirip kopya; dinlenmede rest_m'de durur, tamamı tek kemiğe bağlı."""
+    copies = []
+    for o in src_objs:
+        c = o.copy()
+        c.data = o.data.copy()
+        bpy.context.scene.collection.objects.link(c)
+        mw = o.matrix_world.copy()
+        c.parent = None
+        c.data.transform(mw)            # içe aktarılan nesnenin dönüşümü veriye
+        c.matrix_world = Matrix.Identity(4)
+        copies.append(c)
+    bpy.ops.object.select_all(action='DESELECT')
+    for c in copies:
+        c.select_set(True)
+    bpy.context.view_layer.objects.active = copies[0]
+    if len(copies) > 1:
+        bpy.ops.object.join()
+    obj = bpy.context.view_layer.objects.active
+    obj.name = name
+    obj.data.transform(rest_m)
+    obj.matrix_world = Matrix.Identity(4)
+    vg = obj.vertex_groups.new(name=bone)
+    vg.add([v.index for v in obj.data.vertices], 1.0, 'REPLACE')
+    skin(obj, arm_obj)
+    return obj
+
+
+def add_music_bones(arm_obj):
+    global BOARD_DOWN_HAND
+    BOARD_DOWN_HAND = (STAND_HAND_R[0] - 0.02, STAND_HAND_R[1], 0.33)
+    hold = music_hold_pose()
+    center = Vector(((HOLD_L[0] + HOLD_R[0]) * 0.5, -0.335, 1.0))
+    dev = device_matrix(center)
+    dev_n = dev.normalized()
+    jack_local = Vector((62 * 0.001 * 0.28, 0, 104 * 0.001 * 0.5 + 0.022))
+    jack = dev @ jack_local
+    rests = {}
+    for sfx in ("L", "R"):
+        rests["calar." + sfx] = _helper_rest(arm_obj, hold, "hand." + sfx, dev_n)
+        jm = Matrix.Translation(jack)
+        rests["jack." + sfx] = _helper_rest(arm_obj, hold, "hand." + sfx, jm)
+    # Kulaklar (kafaya bağlı; dinlenme pozunda), parmak ucundaki kulaklık (kulağa değdiği karede)
+    rest_pose = stand_pose(carry=0.0)
+    ear_m = {"L": bud_matrix(EAR_L, 1), "R": bud_matrix(EAR_R, -1)}
+    for sfx in ("L", "R"):
+        rests["kulak." + sfx] = _helper_rest(arm_obj, rest_pose, "head", ear_m[sfx].normalized())
+    at_ear = {"R": music_ear_pose("R"), "L": music_ear_pose("L")}
+    for sfx in ("L", "R"):
+        apply_pose(arm_obj, at_ear[sfx])
+        bpy.context.view_layer.update()
+        hp = arm_obj.pose.bones["head"].matrix.copy()
+        hr = arm_obj.data.bones["head"].matrix_local.copy()
+        ear_now = hp @ hr.inverted() @ ear_m[sfx]
+        rests["kulaklik_el." + sfx] = _helper_rest(arm_obj, at_ear[sfx], "hand." + sfx, ear_now.normalized())
+    rests["cep.L"] = _helper_rest(arm_obj, rest_pose, "hips", Matrix.Translation(Vector(POCKET_L) + Vector((0.01, -0.01, 0.03))))
+    rests["ayirac"] = _helper_rest(arm_obj, rest_pose, "chest", Matrix.Translation(Vector((0, -0.16, 1.0))))
+    parents = {"calar.L": "hand.L", "calar.R": "hand.R", "jack.L": "hand.L", "jack.R": "hand.R",
+               "kulak.L": "head", "kulak.R": "head", "kulaklik_el.L": "hand.L", "kulaklik_el.R": "hand.R",
+               "cep.L": "hips", "ayirac": "chest"}
+    apply_pose(arm_obj, stand_pose())
+    for name, m in rests.items():
+        _new_child_bone(arm_obj, name, parents[name], m)
+    bpy.ops.object.mode_set(mode='POSE')
+    for name in rests:
+        arm_obj.pose.bones[name].rotation_mode = 'XYZ'
+    bpy.ops.object.mode_set(mode='OBJECT')
+    rest_heads(arm_obj)
+    # Meshler: dinlenme matrisi = kemiğin dinlenmesi, ölçek dahil (ölçek meshte kalır)
+    src = _import_music_meshes()
+    scale = Matrix.Diagonal((CALAR_SCALE, CALAR_SCALE, CALAR_SCALE, 1.0))
+    bscale = Matrix.Diagonal((BUD_SCALE, BUD_SCALE, BUD_SCALE, 1.0))
+    parts = [src[k] for k in ("Govde", "Ekran", "Tekerlek", "OrtaTus", "GucTus", "Fis") if k in src]
+    for sfx in ("L", "R"):
+        bone_rest = arm_obj.data.bones["calar." + sfx].matrix_local.copy()
+        _skinned_copy(parts, "Calar_" + sfx, "calar." + sfx, bone_rest @ scale, arm_obj)
+        for kind, bone in (("Kulak", "kulak." + sfx), ("El", "kulaklik_el." + sfx)):
+            br = arm_obj.data.bones[bone].matrix_local.copy()
+            _skinned_copy([src["Kulaklik"]], "Tomurcuk_%s_%s" % (kind, sfx), bone, br @ bscale, arm_obj)
+    for o in src.values():
+        bpy.data.objects.remove(o, do_unlink=True)
+
+
+def music_ear_pose(sfx, **over):
+    """Bir el kulağa kulaklık takarken; öbür el cihazı göğsün önünde tutar."""
+    p = stand_pose(carry=0.0, head_rot=(4, 14 if sfx == "R" else -14, 0), **over)
+    other = "L" if sfx == "R" else "R"
+    side = 1 if sfx == "L" else -1
+    p["hand." + sfx] = EAR_HAND_L if sfx == "L" else EAR_HAND_R
+    p["hand_rot." + sfx] = (-160, 0, 12 * side)
+    p["elbow." + sfx] = (0.46 * side, 0.08, 1.0)
+    p["hand." + other] = (HOLD_L if other == "L" else HOLD_R)
+    p["hand." + other] = (p["hand." + other][0] * 0.5, p["hand." + other][1], p["hand." + other][2])
+    p["hand_rot." + other] = (-60, 0, -22 * side)
+    p["elbow." + other] = (-0.34 * side, 0.22, 0.74)
+    return p
+
 
 
 def make_actions(arm_obj):
@@ -1446,6 +1658,138 @@ def make_actions(arm_obj):
         pose["hand.R"] = (-0.27, 0.0, 0.68)
         key_pose(arm_obj, f, pose)
 
+
+    # --- Müzik çalar: kaykayı yere bırak, cepten çıkar, kulaklıkları tak (sağ, sonra sol), bak ---
+    # Kaykay sağ bacağın yanında kuyruğu üstünde dik durur, burnu yukarıda, grip bacağa dönük,
+    # üstü hafifçe bacağa yaslı. Elden bırakılırken taşıma kısıtının etkisi azalır: kaykay elde
+    # yatay hâlden dik hâle döner, el burnunu tutar, sonra bırakır.
+    board_rest = arm_obj.data.bones["board"].matrix_local.copy()
+    rot = Matrix(((0, 0, 1), (-1, 0, 0), (0, -1, 0))).to_4x4()   # model X -> -Y, Y -> -Z, Z (grip) -> +X
+    rot = Matrix.Rotation(math.radians(13), 4, 'Y') @ rot       # üstü bacağa doğru yatık
+    tail_tip = Vector((0.0, 0.39, 0.03))                         # kuyruğun ucu (model)
+    contact = Vector((-0.24, -0.1, 0.015))
+    rot.translation = contact - (rot.to_3x3() @ tail_tip)
+    stand_m = rot @ board_rest
+    # Ebeveynsiz kemik: poz matrisi = dinlenme @ temel -> temel = dinlenme^-1 @ istenen
+    basis = board_rest.inverted() @ stand_m
+    BOARD_RAW = (tuple(basis.to_translation()), tuple(basis.to_euler('XYZ')))
+    print("MUZIK kaykay dik:", BOARD_RAW)
+    nose = rot @ Vector((0.0, -0.4, 0.06))
+    NOSE_HAND = (nose.x - 0.03, nose.y + 0.01, nose.z + 0.05)
+    # Burnu tutarken (kaykay dik, el üstünde)
+    down = stand_pose(carry=0.0, spine_rot=(4, 0, -4), head_rot=(-4, 8, 0))
+    down["hand.R"] = NOSE_HAND
+    down["hand_rot.R"] = (-12, 0, -8)
+    down["elbow.R"] = (-0.42, 0.45, 0.55)
+    down["board_raw"] = BOARD_RAW
+
+    def on_ground(p):
+        p["carry"] = 0.0
+        p["board_raw"] = BOARD_RAW
+        return p
+
+    def pocket_pose(k_in):
+        p = stand_pose(carry=0.0, hips=(0, 0, -0.012 - 0.01 * k_in), spine_rot=(6, -6, 0), head_rot=(10, -10, 0))
+        p["hand.L"] = (POCKET_L[0], POCKET_L[1] + 0.02 * k_in, POCKET_L[2] - 0.035 * k_in)
+        p["hand_rot.L"] = (20, 0, 10)
+        p["elbow.L"] = (0.36, 0.3, 0.75)
+        return p
+
+    act("muzik_cikar")
+    up_r = stand_pose(carry=0.0)
+    keys = [
+        (0, stand_pose(), False),
+        (3, dict(stand_pose(), board_raw=BOARD_RAW), False),
+        (10, on_ground(dict(down)), True),
+        (13, on_ground(dict(down)), True),
+        (17, on_ground(stand_pose(carry=0.0, spine_rot=(4, -4, 0))), True),
+        (19, on_ground(pocket_pose(0.0)), True),
+        (MZ_CEPTEN, on_ground(pocket_pose(1.0)), True),
+        (30, on_ground(dict(music_hold_pose(), **{"hand.R": up_r["hand.R"], "hand_rot.R": up_r["hand_rot.R"],
+                                                  "elbow.R": up_r["elbow.R"]})), True),
+        (MZ_SAG_AL, on_ground(dict(music_hold_pose(), **{"hand.R": (DEVICE_TOP[0] - 0.02, DEVICE_TOP[1], DEVICE_TOP[2]),
+                                                         "hand_rot.R": (-90, 0, -10)})), True),
+        (MZ_SAG_TAK - 2, on_ground(music_ear_pose("R")), True),
+        (MZ_SAG_TAK + 2, on_ground(music_ear_pose("R", hips=(0, 0, -0.016))), True),
+        (MZ_EL_DEGIS, on_ground(music_hold_pose()), True),
+        (MZ_SOL_AL, on_ground(dict(music_hold_pose(), **{"hand.L": (DEVICE_TOP[0] + 0.02, DEVICE_TOP[1], DEVICE_TOP[2]),
+                                                         "hand_rot.L": (-90, 0, 10)})), True),
+        (MZ_SOL_TAK - 2, on_ground(music_ear_pose("L")), True),
+        (MZ_SOL_TAK + 2, on_ground(music_ear_pose("L", hips=(0, 0, -0.016))), True),
+        (MZ_IKI_EL, on_ground(music_hold_pose()), True),
+        (MUZIK_FRAMES, on_ground(music_hold_pose(hips=(0, 0, -0.016))), True),
+    ]
+    for f, pose, _g in keys:
+        key_pose(arm_obj, f, pose)
+
+    # Bakma (döngü): iki elde, hafif nefes
+    act("muzik_bak")
+    for f, k in ((0, 0.0), (24, 1.0), (48, 0.0)):
+        p = on_ground(music_hold_pose(hips=(0, 0, -0.016 - 0.006 * k)))
+        p["hand.L"] = (HOLD_L[0], HOLD_L[1], HOLD_L[2] + 0.008 * k)
+        p["hand.R"] = (HOLD_R[0], HOLD_R[1], HOLD_R[2] + 0.008 * k)
+        key_pose(arm_obj, f, p)
+
+    # Cebe koy: sol el cihazı cebe, sağ el kaykayı yerden alır, doğrulur (kulaklıklar kulakta kalır)
+    act("muzik_koy")
+    koy = [
+        (0, on_ground(music_hold_pose())),
+        (8, on_ground(pocket_pose(0.0))),
+        (12, on_ground(pocket_pose(1.0))),
+        (16, on_ground(stand_pose(carry=0.0))),
+        (21, on_ground(dict(down))),
+        (24, on_ground(dict(down))),
+        (MUZIK_KOY_FRAMES - 3, dict(stand_pose(), board_raw=BOARD_RAW)),
+        (MUZIK_KOY_FRAMES, stand_pose()),
+    ]
+    for f, pose in koy:
+        key_pose(arm_obj, f, pose)
+
+    # Kısa çıkarma (cihaz açık, kulaklıklar zaten kulakta): kaykayı diker, cepten çıkarır, bakar
+    act("muzik_cikar_kisa")
+    kisa = [
+        (0, stand_pose()),
+        (3, dict(stand_pose(), board_raw=BOARD_RAW)),
+        (10, on_ground(dict(down))),
+        (13, on_ground(dict(down))),
+        (17, on_ground(stand_pose(carry=0.0, spine_rot=(4, -4, 0)))),
+        (19, on_ground(pocket_pose(0.0))),
+        (MZ_CEPTEN, on_ground(pocket_pose(1.0))),
+        (30, on_ground(dict(music_hold_pose(), **{"hand.R": up_r["hand.R"], "hand_rot.R": up_r["hand_rot.R"],
+                                                  "elbow.R": up_r["elbow.R"]}))),
+        (MUZIK_KISA_FRAMES, on_ground(music_hold_pose(hips=(0, 0, -0.016)))),
+    ]
+    for f, pose in kisa:
+        key_pose(arm_obj, f, pose)
+
+    # Kapatma (güç düğmesi): sağ, sonra sol kulaklığı çıkarır; cihazı cebe koyar, kaykayı alır
+    def pulled(sfx):
+        p = music_ear_pose(sfx)
+        h = EAR_HAND_L if sfx == "L" else EAR_HAND_R
+        s = 1 if sfx == "L" else -1
+        p["hand." + sfx] = (h[0] + 0.07 * s, h[1] - 0.03, h[2] - 0.05)
+        return p
+
+    act("muzik_kulaklik_cikar")
+    kc = [
+        (0, on_ground(music_hold_pose())),
+        (KC_SAG_KULAK, on_ground(music_ear_pose("R"))),
+        (KC_SAG_CEK, on_ground(pulled("R"))),
+        (KC_SAG_BIT, on_ground(music_hold_pose())),
+        (KC_SOL_KULAK, on_ground(music_ear_pose("L"))),
+        (KC_SOL_CEK, on_ground(pulled("L"))),
+        (KC_SOL_BIT, on_ground(music_hold_pose())),
+        (KC_SOL_BIT + 2, on_ground(music_hold_pose())),
+        (KC_CEBE - 4, on_ground(pocket_pose(0.0))),
+        (KC_CEBE, on_ground(pocket_pose(1.0))),
+        (KC_CEBE + 4, on_ground(stand_pose(carry=0.0))),
+        (KC_CEBE + 9, on_ground(dict(down))),
+        (KC_CEBE + 12, on_ground(dict(down))),
+        (MUZIK_KC_FRAMES - 3, dict(stand_pose(), board_raw=BOARD_RAW)),
+        (MUZIK_KC_FRAMES, stand_pose()),
+    ]
+    for f, pose in kc:
+        key_pose(arm_obj, f, pose)
     return acts
 
 
@@ -1496,6 +1840,7 @@ def main():
     skin_board(arm_obj)
     add_carry_bone(arm_obj)
     add_bag_bones(arm_obj)
+    add_music_bones(arm_obj)
     acts = make_actions(arm_obj)
     bpy.context.scene.render.fps = FPS
 
@@ -1515,6 +1860,8 @@ def main():
         export_force_sampling=True,
         export_def_bones=True,
         export_yup=True,
+        # Müzik çalar ve kulaklık meshleri köşe rengiyle boyalı
+        export_vertex_color='ACTIVE',
     )
     print("GLB", OUT_GLB, "ANIM", acts)
 

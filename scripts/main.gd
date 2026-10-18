@@ -127,6 +127,12 @@ func _ready() -> void:
 		city.initial_shop = level.get_meta("dukkan")
 	world.add_child(city)
 
+	# Peyzaj: ağaçlar, çalılar, ot öbekleri, kayalar (assets/ada/peyzaj.json)
+	var peyzaj := Peyzaj.new()
+	peyzaj.name = "Peyzaj"
+	peyzaj.look = look
+	world.add_child(peyzaj)
+
 	# İç mekân geçişleri: içerideyken dış dünya gizli ve durur
 	var interiors := IcMekan.new()
 	interiors.name = "IcMekan"
@@ -134,7 +140,7 @@ func _ready() -> void:
 	interiors.follow_cam = camera
 	interiors.ui_parent = self
 	interiors.world = world
-	interiors.outside = [level, crowd, traffic, city, benches]
+	interiors.outside = [level, crowd, traffic, city, benches, peyzaj]
 	add_child(interiors)
 
 	var ui := CanvasLayer.new()

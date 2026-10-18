@@ -40,6 +40,7 @@ var _mouse_last := Vector2.ZERO
 
 # Canlı şehir verisinden bir kez hazırlanan çizimler
 var _polys: Array = []          # [{pts: PackedVector2Array, col, edge}]
+var _trees := PackedVector3Array()   # ağaç tepeleri: x, z, yarıçap (peyzaj)
 var _lines: Array = []          # [{pts, w, col}]
 var _labels: Array = []         # [{p: Vector2, text, kind, pri}]
 var _road_labels: Array = []    # [{p, text}]
@@ -156,6 +157,12 @@ func _prepare() -> void:
 				if o.size() >= 2:
 					_lines.append({"pts": o, "w": float(it.get("w", 2.6)), "col": COL_ALLEY, "road": false})
 	_polys = greens + others
+	if Peyzaj.instance:
+		for it in Peyzaj.instance.items:
+			if String(Peyzaj.TURLER[it[0]].grup) == "Ağaç":
+				var tn := String(it[0])
+				var r := 1.0 if tn.begins_with("servi") else (2.6 if tn.begins_with("cinar") or tn.begins_with("fistik") else 2.0)
+				_trees.append(Vector3(it[1], it[2], r * float(it[4])))
 	_labels.sort_custom(func(a, b): return a.pri < b.pri)
 
 
@@ -319,6 +326,13 @@ func _draw() -> void:
 			var loop := pts.duplicate()
 			loop.append(pts[0])
 			draw_polyline(loop, p.edge, edge_w * 1.5)
+	# Ağaçlar: koyu yeşil taç, üstünde açık benek
+	for t in _trees:
+		var c := Vector2(t.x, t.y)
+		if view.has_point(c):
+			draw_circle(c, t.z, Color(0.2, 0.42, 0.2))
+			if _zoom > 1.2:
+				draw_circle(c + Vector2(-t.z, -t.z) * 0.25, t.z * 0.55, Color(0.32, 0.56, 0.26))
 	# Yollar: önce açık kenar, sonra asfalt (kavşaklar düzgün birleşsin diye köşelere daire)
 	for pass_i in 2:
 		for l in _lines:

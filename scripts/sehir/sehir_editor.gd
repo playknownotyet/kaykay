@@ -14,13 +14,15 @@ extends Node
 
 const TOOLS := [
 	["sec", "Seç / taşı"], ["bina", "Bina"], ["dukkan", "Dükkân"], ["yol", "Ara sokak"],
-	["merdiven", "Merdiven"], ["yukselti", "Yükselti"], ["korkuluk", "Korkuluk"], ["yesil", "Yeşil alan"], ["park", "Çocuk parkı"], ["sil", "Sil"],
+	["merdiven", "Merdiven"], ["yukselti", "Yükselti"], ["korkuluk", "Korkuluk"], ["yesil", "Yeşil alan"], ["park", "Çocuk parkı"], ["agac", "Ağaç / çalı"], ["sil", "Sil"],
 ]
 const COLORS := {
 	"bina": Color(0.6, 0.85, 1.0), "dukkan": Color(1.0, 0.82, 0.3), "yol": Color(0.95, 0.75, 0.55),
 	"merdiven": Color(1.0, 0.55, 0.25), "yukselti": Color(0.55, 1.0, 0.6), "korkuluk": Color(0.85, 0.85, 0.9),
-	"yesil": Color(0.4, 0.9, 0.35), "park": Color(1.0, 0.5, 0.75),
+	"yesil": Color(0.4, 0.9, 0.35), "park": Color(1.0, 0.5, 0.75), "agac": Color(0.45, 0.85, 0.4),
 }
+## Peyzaj aracı seçenekleri: "rastgele:<grup>" ya da tür adı (Peyzaj.TURLER)
+const PZ_GRUPLAR := ["Ağaç", "Çalı", "Ot / kaya"]
 
 var sehir: Sehir
 var world: SubViewport
@@ -54,6 +56,10 @@ var _blocked := false                # sürüklenen öğe yol / kaldırımla ça
 var _rot_drag := false               # döndürme tutamacı sürükleniyor
 var _rot_orig := 0.0
 var _slider_drag := false
+## Peyzaj fırçası: basılıyken sürükleyince ekler / siler
+var _pz_paint := false
+var _pz_last := Vector2.INF
+var _pz_save := false
 ## Otomatik kayıt: her değişiklikten ~1 sn sonra dosyaya yazılır (pencere kapanınca iş kaybolmasın)
 var _save_t := -1.0
 ## Mıknatıs: kenarlar bu kadar (m) yakınsa hizalanır / birleşir; açı bu kadar (derece) yakınsa eşitlenir
@@ -92,6 +98,7 @@ func _ready() -> void:
 	world.add_child(_lines)
 	for t in Sehir.VARSAYILAN:
 		_defaults[t] = Sehir.VARSAYILAN[t].duplicate(true)
+	_defaults["agac"] = {"tur": "rastgele:Ağaç", "firca": false, "aralik": 5.0, "sil": false, "yaricap": 3.0}
 	_build_ui()
 
 
@@ -121,6 +128,9 @@ func close(teleport := false) -> void:
 	if _dirty_t >= 0.0:
 		_apply_rebuild()
 	sehir.save()
+	if _pz_save and Peyzaj.instance:
+		Peyzaj.instance.save()
+		_pz_save = false
 	if teleport:
 		var p := _ground_point_at_center()
 		if p != Vector3.INF:
@@ -260,7 +270,8 @@ func _update_status() -> void:
 		"park": "Sol tık: çocuk parkı koy (30 x 24 m) / var olanı seç · Mavi çubuk: döndür",
 		"korkuluk": "Tıkla tıkla: korkuluk çiz · Enter / çift tık: bitir",
 		"yesil": "Tıkla tıkla: çim alanın köşeleri · Enter / çift tık: bitir (en az 3 köşe)",
-		"sil": "Sol tık: tıklanan öğeyi sil",
+		"sil": "Sol tık: tıklanan öğeyi sil (öğe yoksa en yakın ağaç / çalı)",
+		"agac": "Sol tık: ağaç / çalı koy · Fırça açıkken basılı tutup sürükle · Silme modunda tıklanan yerdekiler silinir · Ctrl+Z geri al",
 	}
 	_status.text = "%s     |  Sağ / orta tuş: kaydır · Tekerlek: yakınlaştır · T: tepeden · Ctrl+S: kaydet · Tab: çık" % help.get(_tool, "")
 
@@ -317,6 +328,21 @@ func _refresh_props() -> void:
 			_check(it, "korkuluk", "Korkuluk (grind)")
 		"park":
 			_num(it, "r", "Yön (derece)", -180.0, 180.0, 0.5)
+		"agac":
+			var pairs := []
+			for g in PZ_GRUPLAR:
+				pairs.append(["rastgele:" + g, "Rastgele " + String(g).to_lower()])
+			for k in Peyzaj.TURLER:
+				pairs.append([k, "%s · %s" % [Peyzaj.TURLER[k].grup, Peyzaj.TURLER[k].ad]])
+			_opt_str(it, "tur", "Tür", pairs)
+			_check(it, "firca", "Fırça (basılı tutup sürükle)")
+			_num(it, "aralik", "Fırça aralığı (m)", 1.0, 20.0, 0.5)
+			_check(it, "sil", "Silme modu")
+			_num(it, "yaricap", "Silme yarıçapı (m, fırçada)", 0.5, 15.0, 0.5)
+			if Peyzaj.instance:
+				var info := Label.new()
+				info.text = "Adada %d ağaç / çalı / ot / kaya" % Peyzaj.instance.items.size()
+				_props.add_child(info)
 		"yukselti":
 			_num(it, "w", "Genişlik (m)", 1.0, 40.0, 0.5)
 			_num(it, "d", "Derinlik (m)", 1.0, 40.0, 0.5)
@@ -581,6 +607,7 @@ func _on_mouse_button(e: InputEventMouseButton) -> void:
 				return
 			_click(p)
 		else:
+			_pz_paint = false
 			if _drag:
 				_drag = false
 				# Yol / kaldırımın üstüne bırakıldıysa eski yerine döner
@@ -604,6 +631,9 @@ func _on_mouse_motion(e: InputEventMouseMotion) -> void:
 		_update_camera()
 		return
 	_hover = _ray_ground(_to_world(e.position))
+	if _pz_paint and _hover != Vector3.INF:
+		_pz_stamp(Vector2(_hover.x, _hover.z))
+		return
 	if _rot_drag and not _sel.is_empty() and _hover != Vector3.INF:
 		var c := Sehir.v2(_sel.p)
 		var ang := rad_to_deg(atan2(_hover.x - c.x, _hover.z - c.y))
@@ -644,6 +674,19 @@ func _click(raw: Vector3) -> void:
 				_push_undo()
 				sehir.remove(sehir.data.items[i])
 				_outline_cache.clear()
+			elif Peyzaj.instance:
+				_pz_undo()
+				if Peyzaj.instance.remove_at_point(raw.x, raw.z, 2.0) == 0:
+					_undo.pop_back()
+				else:
+					_pz_save = true
+		"agac":
+			if not Peyzaj.instance:
+				return
+			_pz_undo()
+			_pz_paint = bool(_defaults.agac.firca)
+			_pz_last = Vector2.INF
+			_pz_stamp(Vector2(raw.x, raw.z))
 		"bina", "dukkan", "yukselti", "park":
 			# Var olan bir öğeye tıklandıysa yenisini koyma: onu seç (taşı / özelliklerini değiştir)
 			var hit := sehir.item_at(Vector2(raw.x, raw.z))
@@ -894,6 +937,47 @@ func _delete_selected() -> void:
 	_outline_cache.clear()
 
 
+## Peyzaj değişikliğinden önce: geri alma kaydı
+func _pz_undo() -> void:
+	_save_t = 0.0
+	_pz_save = true
+	_undo.append("PZ:" + Peyzaj.instance.snapshot())
+	if _undo.size() > 60:
+		_undo.pop_front()
+
+
+## Peyzaj aracı: noktaya bir öğe koy (fırçada aralıkla) ya da silme modunda sil
+func _pz_stamp(p: Vector2) -> void:
+	var pz := Peyzaj.instance
+	var dz: Dictionary = _defaults.agac
+	var gap := float(dz.aralik)
+	if dz.firca and _pz_last != Vector2.INF and p.distance_to(_pz_last) < (gap if not dz.sil else float(dz.yaricap) * 0.5):
+		return
+	_pz_last = p
+	_save_t = 0.0
+	if dz.sil:
+		pz.remove_at_point(p.x, p.y, float(dz.yaricap) if dz.firca else 2.0, dz.firca)
+		_refresh_props()
+		return
+	var tur := String(dz.tur)
+	if tur.begins_with("rastgele:"):
+		var grp := tur.substr(9)
+		var opts := []
+		for k in Peyzaj.TURLER:
+			# Ot öbekleri "rastgele ot / kaya"da daha sık, kaya seyrek
+			if String(Peyzaj.TURLER[k].grup) == grp:
+				opts.append(k)
+				if k.begins_with("ot"):
+					opts.append(k)
+		tur = opts[randi() % opts.size()]
+	if dz.firca and pz.has_near(p.x, p.y, gap * 0.6):
+		return
+	# Fırçada her damga biraz dağınık (sıra sıra dizilmesin)
+	var j := Vector2(randf_range(-1, 1), randf_range(-1, 1)) * (gap * 0.3 if dz.firca else 0.0)
+	pz.add(tur, p.x + j.x, p.y + j.y, randf_range(-180.0, 180.0), randf_range(0.85, 1.15))
+	_refresh_props()
+
+
 func _push_undo() -> void:
 	_save_t = 0.0
 	_undo.append(JSON.stringify(sehir.data.items))
@@ -904,7 +988,15 @@ func _push_undo() -> void:
 func _do_undo() -> void:
 	if _undo.is_empty():
 		return
-	var items = JSON.parse_string(_undo.pop_back())
+	var entry: String = _undo.pop_back()
+	if entry.begins_with("PZ:"):
+		if Peyzaj.instance:
+			Peyzaj.instance.restore(entry.substr(3))
+			_pz_save = true
+			_save_t = 0.0
+			_refresh_props()
+		return
+	var items = JSON.parse_string(entry)
 	if items is Array:
 		sehir.data.items = items
 		_select({})
@@ -916,6 +1008,9 @@ func _do_undo() -> void:
 func _do_save() -> void:
 	if _dirty_t >= 0.0:
 		_apply_rebuild()
+	if Peyzaj.instance:
+		Peyzaj.instance.save()
+		_pz_save = false
 	if sehir.save():
 		_status.text = "Kaydedildi: " + Sehir.DATA_PATH
 	else:
@@ -970,6 +1065,9 @@ func _process(delta: float) -> void:
 			if _dirty_t >= 0.0:
 				_apply_rebuild()
 			sehir.save()
+			if _pz_save and Peyzaj.instance:
+				Peyzaj.instance.save()
+				_pz_save = false
 	if not is_open:
 		return
 	# Klavyeyle kaydırma (yazı kutusuna yazarken değil)
@@ -1059,6 +1157,19 @@ func _draw_lines() -> void:
 			im.surface_set_color(Color(1, 1, 1))
 			im.surface_add_vertex(hc + d)
 			any = true
+	if _tool == "agac" and _hover != Vector3.INF:
+		var dz: Dictionary = _defaults.agac
+		var rr := float(dz.yaricap) if dz.sil else (float(dz.aralik) * 0.5 if dz.firca else 0.8)
+		var cc := Color(1.0, 0.4, 0.3) if dz.sil else COLORS.agac
+		for q in 24:
+			var a0 := q / 24.0 * TAU
+			var a1 := (q + 1) / 24.0 * TAU
+			for a in [a0, a1]:
+				var px := _hover.x + cos(a) * rr
+				var pz := _hover.z + sin(a) * rr
+				im.surface_set_color(cc)
+				im.surface_add_vertex(Vector3(px, sehir.ground(px, pz) + 0.2, pz))
+		any = true
 	if not _temp.is_empty():
 		var col: Color = COLORS.get(_tool, Color.WHITE)
 		for k in pts.size() - 1:

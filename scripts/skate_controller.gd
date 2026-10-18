@@ -161,6 +161,11 @@ var held_item := ""
 ## Elde tutulan eşyanın düğümü (görsel her kare sol ele oturtur)
 var held_node: Node3D = null
 var bag_open := false
+## Müzik çalar: dışarıda mı (ekranda açık), açık mı (güç), kulaklıklar kulakta mı
+var music_open := false
+var music_power := false
+var earbuds_in := false
+signal music_changed(open: bool)
 ## Bankta oturuyor: gövde bankın önünde durur, görsel sit_offset kadar kayıp oturağa yerleşir
 var sitting := false
 var sit_offset := Vector3.ZERO
@@ -169,6 +174,11 @@ var _sit_t := 0.0
 var held_in_air := false
 ## karakter_rig.py: canta_ac / canta_kapat 24 kare, cantaya_koy 24 kare (14. karede çantada)
 const BAG_ANIM_TIME := 24.0 / 30.0
+## Müzik çalar animasyonları (tools/blender/karakter_rig.py: MUZIK_FRAMES, MUZIK_KOY_FRAMES)
+const MUZIK_CIKAR_TIME := 80.0 / 30.0
+const MUZIK_KOY_TIME := 34.0 / 30.0
+const MUZIK_KISA_TIME := 36.0 / 30.0       # cihaz açıkken: yalnız cepten çıkarır
+const MUZIK_KC_TIME := 72.0 / 30.0         # güç kapatma: kulaklıkları çıkarır, cebe koyar
 const STOW_TIME := 24.0 / 30.0
 const STOW_DROP := 14.0 / 30.0
 var _stow_t := -1.0
@@ -279,7 +289,7 @@ func _physics_process(delta: float) -> void:
 		inp.consume_skitch()
 		_ollie_buffer = 0.0
 		return
-	if fall_time > 0.0 or action_time > 0.0 or input_locked or (bag_open and on_foot):
+	if fall_time > 0.0 or action_time > 0.0 or input_locked or (bag_open and on_foot) or (music_open and on_foot):
 		inp.consume_board_toggle()
 		inp.consume_skitch()
 		_ollie_buffer = 0.0
@@ -574,7 +584,7 @@ func _handle_walls() -> void:
 ## Kaykaydan in / kaykaya bin. Animasyonlu: binerken yürürken kaykayı yere bırakır,
 ## üstüne basıp bir kez iter; inerken kaykaydan atlayıp onu altından çekip eline alır.
 func toggle_board() -> void:
-	if board_anim != BoardAnim.NONE or held_item != "" or bag_open or sitting:
+	if board_anim != BoardAnim.NONE or held_item != "" or bag_open or sitting or (music_open and on_foot):
 		return
 	if on_foot:
 		board_anim = BoardAnim.MOUNTING
@@ -924,7 +934,7 @@ func toggle_bag() -> void:
 ## Banka otur: front = oturağın önündeki yer noktası, facing = oturanın baktığı yön,
 ## seat = oturan kökünün olacağı nokta (kalça oturağın üstüne gelir)
 func sit(front: Vector3, facing: Vector3, seat: Vector3) -> bool:
-	if sitting or not on_foot or not is_on_floor() or action_time > 0.0 or fall_time > 0.0 or bag_open or input_locked:
+	if sitting or not on_foot or not is_on_floor() or action_time > 0.0 or fall_time > 0.0 or bag_open or input_locked or music_open:
 		return false
 	global_position = Vector3(front.x, global_position.y, front.z)
 	reset_physics_interpolation()
@@ -984,6 +994,57 @@ func take_back(items: Array) -> void:
 
 # ---------- Bağlam eylemleri ----------
 
+## Müzik çalar butonu. Yayayken: kaykayı yanına diker, cepten çıkarır; cihaz kapalıysa (güç) açar ve
+## kulaklıkları takar, açıksa kulaklıklar zaten kulakta, yalnız çıkarıp bakar. Butona ya da MENU'ye
+## yeniden basınca cebine koyar (cihaz açık kalır, müzik sürer). Kaykaydayken animasyon yok.
+func toggle_music() -> void:
+	if fall_time > 0.0 or held_in_air or sitting or input_locked or board_anim != BoardAnim.NONE:
+		return
+	if music_open:
+		if on_foot and action_time > 0.0:
+			return
+		music_open = false
+		if on_foot:
+			play_action("muzik_koy", MUZIK_KOY_TIME)
+		music_changed.emit(false)
+		return
+	if bag_open or held_item != "" or (on_foot and action_time > 0.0):
+		return
+	if on_foot:
+		if music_power:
+			play_action("muzik_cikar_kisa", MUZIK_KISA_TIME)
+		else:
+			play_action("muzik_cikar", MUZIK_CIKAR_TIME)
+	music_open = true
+	music_power = true
+	earbuds_in = true
+	music_changed.emit(true)
+
+
+## Güç düğmesi: cihazı kapatır; yayayken kulaklıkları çıkarır, cihazı cebe koyar, kaykayı alır
+func music_power_off() -> void:
+	if not music_power or (on_foot and action_time > 0.0):
+		return
+	music_power = false
+	earbuds_in = false
+	if music_open:
+		music_open = false
+		if on_foot:
+			play_action("muzik_kulaklik_cikar", MUZIK_KC_TIME)
+		music_changed.emit(false)
+
+
+## Düşünce / dükkâna girince: animasyonsuz kapanır (cihaz cebe)
+func close_music_now() -> void:
+	if not music_open:
+		return
+	music_open = false
+	if action_name.begins_with("muzik_"):
+		action_time = 0.0
+		action_name = ""
+	music_changed.emit(false)
+
+
 ## Tek seferlik eylem animasyonu (yayayken): süre boyunca yerinde durur
 func play_action(n: String, duration: float) -> void:
 	if not on_foot or fall_time > 0.0 or action_time > 0.0:
@@ -1006,6 +1067,7 @@ func press_context(id: String) -> void:
 func knockdown(push: Vector3) -> void:
 	if fall_time > 0.0:
 		return
+	close_music_now()
 	stand_up()
 	cancel_grind()
 	_end_skitch(false)

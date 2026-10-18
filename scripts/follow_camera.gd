@@ -27,7 +27,16 @@ extends Camera3D
 @export var bump_stiffness := 260.0
 @export var bump_damping := 22.0
 
+## Bakış joystick'i (kaykaydayken): tam yana çekince kamera bu kadar döner (derece); bırakınca geri gelir
+@export var peek_max := 110.0
+## Tam yukarı / aşağı çekince bakış noktası bu kadar yükselir / alçalır (m)
+@export var peek_up := 2.6
+@export var peek_down := 1.4
+
 @export_group("Yaya kamerası")
+## Ekranda parmakla çevirme: bir ekran yüksekliği kaydırınca dönüş (derece)
+@export var foot_drag_yaw := 210.0
+@export var foot_drag_pitch := 120.0
 ## Kamera joystick'i tam saptırınca dönüş hızı (derece / sn)
 @export var foot_yaw_speed := 170.0
 @export var foot_pitch_speed := 95.0
@@ -60,6 +69,7 @@ var _foot_dist := 3.4           # engel yüzünden kısalabilen mesafe
 var _foot_base := 3.4           # engelsiz mesafe (geçişte yumuşakça foot_distance'a gider)
 var _foot_look := 1.05          # bakış yüksekliği (geçişte yumuşak)
 var _in_foot := false
+var _peek := Vector2.ZERO       # bakış joystick'i (yumuşatılmış; x yan, y yukarı)
 
 
 func _ready() -> void:
@@ -93,13 +103,19 @@ func _process(delta: float) -> void:
 	if not target:
 		return
 	_time += delta
+	var drag := SkateInput.consume_cam_drag()
 	var pos := target.get_global_transform_interpolated().origin
 	if target.on_foot and target.board_anim == SkateController.BoardAnim.NONE:
 		if not _in_foot:
 			_enter_foot(pos)
-		_foot_camera(delta, pos)
+		_peek = Vector2.ZERO
+		_foot_camera(delta, pos, drag)
 		return
 	_in_foot = false
+	# Bakış joystick'i (ya da klavyede I J K L): her yöne kısa bakış, bırakınca öne döner
+	var peek_in: Vector2 = SkateInput.peek if SkateInput.peek.length() > 0.01 else SkateInput.cam_stick
+	var peek_rate := 9.0 if peek_in.length() > _peek.length() else 5.5
+	_peek = _peek.lerp(peek_in, 1.0 - exp(-peek_rate * delta))
 
 	# Hız çarpanı yumuşak artar/azalır; ease ile düşük hızda az, yüksekte çok etki
 	var raw := clampf(absf(target.speed) / fast_speed, 0.0, 1.0) if target.speed > 0.0 and not target.on_foot else 0.0
@@ -114,9 +130,18 @@ func _process(delta: float) -> void:
 		turn = 1.5 * away * clampf(target.speed / 1.0, 0.0, 1.0)
 	_yaw = lerp_angle(_yaw, _heading_yaw(), 1.0 - exp(-turn * delta))
 	var dir := _yaw_dir()
+	if absf(_peek.x) > 0.001:
+		var a := _yaw - _peek.x * deg_to_rad(peek_max)
+		dir = Vector3(-sin(a), 0.0, -cos(a))
 
 	var dist := lerpf(distance_slow, distance_fast, s)
 	var h := lerpf(height_slow, height_fast, s)
+	# Yukarı bakış: kamera alçalır, bakış noktası yükselir; aşağı bakış: kamera yükselir
+	var py := _peek.y
+	if py > 0.0:
+		h = lerpf(h, 0.55, py * 0.8)
+	else:
+		h += -py * 1.6
 	var desired := pos - dir * dist + Vector3.UP * h
 	var t := 1.0 - exp(-follow_sharpness * delta)
 	var cam := _base_pos
@@ -127,7 +152,7 @@ func _process(delta: float) -> void:
 	_base_pos = cam
 	global_position = cam
 
-	var look_target := pos + Vector3.UP * look_height + dir * look_ahead * s
+	var look_target := pos + Vector3.UP * (look_height + maxf(py, 0.0) * peek_up - maxf(-py, 0.0) * peek_down) + dir * look_ahead * s
 	_look = _look.lerp(look_target, 1.0 - exp(-12.0 * delta))
 
 	# Zemin hissi: yüzeye göre sürekli titreme + taş/iniş sekmesi (yaylı, kısa)
@@ -165,7 +190,14 @@ func _enter_foot(pos: Vector3) -> void:
 ## Yaya: üçüncü şahıs yörünge kamerası. Joystick dönüş hızı verir (yumuşak ivmeyle), boşta
 ## kalınca ve karakter yürürken kamera yavaşça arkasına geçer, bakış açısı varsayılana döner.
 ## Arada duvar / ağaç varsa kamera öne çekilir.
-func _foot_camera(delta: float, pos: Vector3) -> void:
+func _foot_camera(delta: float, pos: Vector3, drag := Vector2.ZERO) -> void:
+	# Ekranda parmak kaydırma: sağa çekince sağa, yukarı çekince yukarı bakar
+	if drag != Vector2.ZERO:
+		_yaw -= drag.x * deg_to_rad(foot_drag_yaw)
+		_pitch = clampf(_pitch + drag.y * deg_to_rad(foot_drag_pitch), deg_to_rad(foot_pitch_min), deg_to_rad(foot_pitch_max))
+		_yaw_vel = 0.0
+		_pitch_vel = 0.0
+		_idle_cam = 0.0
 	var stick: Vector2 = SkateInput.cam_stick
 	var want_yaw := -stick.x * deg_to_rad(foot_yaw_speed)
 	var want_pitch := -stick.y * deg_to_rad(foot_pitch_speed)
@@ -173,7 +205,7 @@ func _foot_camera(delta: float, pos: Vector3) -> void:
 	_pitch_vel = lerpf(_pitch_vel, want_pitch, 1.0 - exp(-14.0 * delta))
 	_yaw += _yaw_vel * delta
 	_pitch = clampf(_pitch + _pitch_vel * delta, deg_to_rad(foot_pitch_min), deg_to_rad(foot_pitch_max))
-	if stick.length() > 0.05:
+	if stick.length() > 0.05 or drag != Vector2.ZERO:
 		_idle_cam = 0.0
 	else:
 		_idle_cam += delta

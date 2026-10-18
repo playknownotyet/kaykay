@@ -19,8 +19,8 @@ extends Node3D
 const MODEL := preload("res://assets/karakter/karakter.glb")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
 const STATES := ["ride", "push", "push_ret", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount", "dus", "tutun", "yaya_hava", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "canta_acik",
-	"yaya_zipla", "yaya_inis", "eline_al", "cantaya_koy", "havada_cirpin", "otur"]
-const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "ride_tuck", "brake", "air", "grind", "grind_down", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut", "otur"]
+	"yaya_zipla", "yaya_inis", "eline_al", "cantaya_koy", "havada_cirpin", "otur", "muzik_cikar", "muzik_bak", "muzik_koy", "muzik_cikar_kisa", "muzik_kulaklik_cikar"]
+const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "ride_tuck", "brake", "air", "grind", "grind_down", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut", "otur", "muzik_bak"]
 ## Ollie animasyonunda fiziksel sıçramanın olduğu an (karakter_rig.py OLLIE_POP_FRAME / 30)
 const OLLIE_POP_TIME := 0.1
 ## İtmeden dönüş (ayak kaykaya geri biner): karakter_rig.py PUSH_RET_FRAMES / 30
@@ -174,6 +174,11 @@ func _ready() -> void:
 	skel.add_child(_sway)
 	# Geçişlerde ayak tahtaya gömülmesin (en son çalışır)
 	skel.add_child(FootGuard.new())
+	# Müzik çalar, kulaklıklar ve kablo
+	var mz := MuzikAksesuar.new()
+	mz.controller = controller
+	mz.model = _model
+	add_child(mz)
 	_prev_yaw = atan2(controller.heading.x, controller.heading.z)
 	controller.ollied.connect(func(): _kick_arms(Vector2(0.0, 1.6)))
 	controller.landed.connect(func(impact: float): _kick_arms(Vector2(-0.4, -0.5) * clampf(impact / 4.0, 0.0, 1.5)))
@@ -299,13 +304,13 @@ func _setup_animation() -> void:
 		bt.connect_node("state", STATES.find(st), st + "_scale")
 
 	# Zıplamalar: bir noktadan başlatılabilir (rampadan / raydan çıkışta "pat" anından)
-	for st in ["ollie", "flip", "push_ret", "yaya_zipla", "yaya_inis", "dus", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "eline_al", "cantaya_koy"]:
+	for st in ["ollie", "flip", "push_ret", "yaya_zipla", "yaya_inis", "dus", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "eline_al", "cantaya_koy", "muzik_cikar", "muzik_koy", "muzik_cikar_kisa", "muzik_kulaklik_cikar"]:
 		bt.add_node(st + "_anim", anim.call(st))
 		bt.add_node(st + "_seek", AnimationNodeTimeSeek.new())
 		bt.connect_node(st + "_seek", 0, st + "_anim")
 		bt.connect_node("state", STATES.find(st), st + "_seek")
 
-	for st in ["brake", "crouch", "air", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "otur"]:
+	for st in ["brake", "crouch", "air", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "otur", "muzik_bak"]:
 		bt.add_node(st, anim.call(st))
 		bt.connect_node("state", STATES.find(st), st)
 
@@ -388,6 +393,8 @@ func _update_animation() -> void:
 		st = controller.action_name
 	elif controller.bag_open and controller.on_foot:
 		st = "canta_acik"
+	elif controller.music_open and controller.on_foot:
+		st = "muzik_bak"
 	elif controller.skitch_car:
 		st = "tutun"
 	elif controller.board_anim == SkateController.BoardAnim.MOUNTING:

@@ -16,6 +16,7 @@ var look: Node
 var touch_controls: Control
 var _look_button: PixelButton
 var _map_button: PixelButton
+var _music: MuzikCalar
 var _look_menu: Control
 var _bag_ui: Control
 
@@ -39,7 +40,8 @@ func setup(p_player: SkateController, p_camera: Node, p_visual: Node, p_fx: Node
 	_capture_defaults()
 	_load()
 	_sync_widgets()
-	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _look_menu, _bag_ui.button, _map_button])
+	touch_controls.blockers.assign([_panel, _settings_button, _respawn_button, _look_button, _look_menu, _bag_ui.button, _map_button,
+		_music.button, _music._hit])
 	touch_controls.player = player
 	look.changed.connect(func(_n: String): _sync_widgets())
 
@@ -174,6 +176,10 @@ func _build() -> void:
 	_bag_ui = preload("res://scripts/ui/envanter_ui.gd").new()
 	_bag_ui.player = player
 	add_child(_bag_ui)
+	# Müzik çalar: çantanın üstünde butonu, açılınca alt ortada cihaz
+	_music = MuzikCalar.new()
+	_music.player = player
+	add_child(_music)
 
 	# Sol üst: ikon butonlar (ayarlar, başa dön, görünüm)
 	var b := vh * 0.1

@@ -14,3 +14,9 @@ __pycache__/
 tests/tmp/
 /x
 *.mov
+
+# Apple Music eklentisi: iOS derlemesinde (GitHub Mac) üretilir
+native/apple_muzik/godot-cpp/
+native/apple_muzik/bin/
+native/apple_muzik/.sconsign*
+addons/apple_muzik/

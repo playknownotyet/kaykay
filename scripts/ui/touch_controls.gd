@@ -5,10 +5,13 @@ extends Control
 ##   Sol yarı (ayak): aşağı sürt = it, iterken yana kaydır = dön, yukarı sürt = fren / geri it
 ##   Sağ yarı (el): yüzen joystick (x = direksiyon); hızlıca yukarı fırlat = ollie
 ##   İkon butonlar: kaykaydan in (sağ üst), arabaya tutun / bırak (yalnız uygunken)
+##   Bakış joystick'i (inme butonunun altında, kamera ikonlu): hangi yöne çekilirse o yana bakar, bırakınca
+##   kendiliğinden ortaya döner (kısa bakışlar için)
 ## Yayayken:
 ##   Sol yarı: yüzen yürüme joystick'i (yarıya kadar yürü, sonuna kadar koş)
-##   Sağ yarı: kamera joystick'i (sapma = dönüş hızı; bırakınca kamera karakterin arkasına
-##   yavaşça kendiliğinden döner), zıpla ve etkileşim (kaykaya bin) butonları
+##   Ekranın başka herhangi bir yeri: parmağı kaydırınca kamera döner (sağa çek = sağa bak;
+##   bırakınca bir süre sonra kamera karakterin arkasına yavaşça döner), zıpla ve
+##   etkileşim (kaykaya bin) butonları
 ##
 ## Butonlar burada çizilir ve dokunuşları burada işlenir: bir parmak yürürken öbürü zıplayabilir.
 
@@ -25,7 +28,7 @@ const FLICK_TIME := 0.18
 const FLICK_FROM := 0.35
 const FLICK_TO := 0.85
 
-enum Zone { LEFT, RIGHT, BUTTON }
+enum Zone { LEFT, RIGHT, BUTTON, CAM, PEEK }
 const ROUND := ["zipla", "bin", "koy"]
 
 
@@ -42,6 +45,9 @@ var _move_knob := Vector2.ZERO
 var _flick_low_time := -10.0
 var _flick_armed := true
 var _pressed := {}                # buton adı -> dokunuş indeksi
+var _cam_owner := -1              # yaya: kamerayı çeviren parmak
+var _peek_owner := -1             # kaykay: göz butonunu tutan parmak
+var _peek_v := Vector2.ZERO       # bakış topuzunun kayması (birim daire; y yukarı +)
 
 
 func _ready() -> void:
@@ -96,7 +102,7 @@ func _buttons() -> Dictionary:
 			var cb: Dictionary = player.context_buttons[i]
 			var c := base - Vector2((cd + h * 0.03) * i, 0)
 			out["ctx:" + String(cb.id)] = [Rect2(c - Vector2(cd, cd) * 0.5, Vector2(cd, cd)), cb.icon, cb.get("color", Color(1, 1, 1, 0.95))]
-	if player.input_locked or player.held_in_air:
+	if player.input_locked or player.held_in_air or (player.music_open and player.on_foot):
 		return out
 	if player.on_foot:
 		# Kamera joystick'i sağ altta; zıplama onun üstünde, kaykaya binme zıplamanın sağında (yuvarlak)
@@ -119,8 +125,10 @@ func _buttons() -> Dictionary:
 			out["in"] = [Rect2(size.x - m - b, m, b, b), "in"]
 		var can_skitch := player.skitch_car != null or (player.skitch_candidate != null and player.grounded)
 		if can_skitch and not busy:
+			# Göz butonunun altında
 			var s := h * 0.15
-			out["tutun"] = [Rect2(size.x - m - s, m + b + h * 0.04, s, s), "birak" if player.skitch_car else "tutun"]
+			var pr := _peek_rect()
+			out["tutun"] = [Rect2(size.x - m - s, pr.end.y + h * 0.04, s, s), "birak" if player.skitch_car else "tutun"]
 	return out
 
 
@@ -144,6 +152,11 @@ func _press_button(name: String) -> void:
 func _on_press(index: int, pos: Vector2) -> void:
 	if _is_blocked(pos + global_position):
 		return
+	if _peek_owner == -1 and _peek_on() and pos.distance_to(_peek_rect().get_center()) < _peek_rect().size.x * 0.5 + get_rect().size.y * 0.02:
+		_peek_owner = index
+		_touches[index] = {"zone": Zone.PEEK, "start": pos, "pos": pos, "time": _now(), "last_time": _now()}
+		_update_peek(pos)
+		return
 	var btns := _buttons()
 	for name in btns:
 		var r: Rect2 = btns[name][0]
@@ -164,6 +177,13 @@ func _on_press(index: int, pos: Vector2) -> void:
 		"anchor_x": pos.x,
 		"ollie_done": false,
 	}
+	if SkateInput.on_foot and not (t.zone == Zone.LEFT and _gesture_owner == -1):
+		# Yaya: hareket joystick'i dışındaki her dokunuş kamerayı çevirir
+		t.zone = Zone.CAM
+		_touches[index] = t
+		if _cam_owner == -1:
+			_cam_owner = index
+		return
 	_touches[index] = t
 	if t.zone == Zone.LEFT and _gesture_owner == -1:
 		_gesture_owner = index
@@ -185,6 +205,10 @@ func release_all() -> void:
 	for index in _touches.keys():
 		_on_release(index)
 	_pressed.clear()
+	_cam_owner = -1
+	_peek_owner = -1
+	_peek_v = Vector2.ZERO
+	SkateInput.set_peek(Vector2.ZERO)
 
 
 func _on_release(index: int) -> void:
@@ -194,6 +218,12 @@ func _on_release(index: int) -> void:
 	for name in _pressed.keys():
 		if _pressed[name] == index:
 			_pressed.erase(name)
+	if index == _cam_owner:
+		_cam_owner = -1
+	if index == _peek_owner:
+		_peek_owner = -1
+		_peek_v = Vector2.ZERO
+		SkateInput.set_peek(Vector2.ZERO)
 	if index == _gesture_owner:
 		_gesture_owner = -1
 		SkateInput.touch_gesture_end()
@@ -216,6 +246,15 @@ func _on_drag(index: int, pos: Vector2) -> void:
 	if t.zone == Zone.BUTTON:
 		return
 	var h := get_rect().size.y
+	if t.zone == Zone.PEEK:
+		t.pos = pos
+		_update_peek(pos)
+		return
+	if t.zone == Zone.CAM:
+		if index == _cam_owner:
+			SkateInput.add_cam_drag((pos - (t.pos as Vector2)) / h)
+		t.pos = pos
+		return
 	var now := _now()
 	var dt := maxf(now - t.last_time, 0.001)
 	var finger_hps: float = (pos.y - t.pos.y) / h / dt
@@ -295,6 +334,56 @@ func _swipe_ollie(t: Dictionary) -> void:
 		SkateInput.request_ollie()
 
 
+# ---------- Göz butonu (kaykay) ----------
+
+func _peek_on() -> bool:
+	return player != null and not SkateInput.on_foot and not player.input_locked and not player.held_in_air \
+		and player.board_anim == SkateController.BoardAnim.NONE
+
+
+## Bakış joystick'inin alanı (kare): inme butonunun altında; ortası topuzun dinlenme yeri
+func _peek_rect() -> Rect2:
+	var size := get_rect().size
+	var h := size.y
+	var m := h * 0.04
+	var b := h * 0.12
+	var d := h * 0.17
+	var c := Vector2(minf(size.x - m - b * 0.5, size.x - m - d * 0.5), m + b + h * 0.035 + d * 0.5)
+	return Rect2(c - Vector2(d, d) * 0.5, Vector2(d, d))
+
+
+## Topuzun gidebileceği yarıçap
+func _peek_reach() -> float:
+	var r := _peek_rect()
+	return r.size.x * 0.5 - get_rect().size.y * 0.03
+
+
+func _update_peek(pos: Vector2) -> void:
+	var d := (pos - _peek_rect().get_center()) / maxf(_peek_reach(), 1.0)
+	_peek_v = Vector2(d.x, -d.y).limit_length(1.0)
+	SkateInput.set_peek(_peek_v)
+
+
+## Küçük, kendiliğinden ortaya dönen joystick: soluk halka, dört yönde ok, kamera ikonlu topuz
+func _draw_peek() -> void:
+	var r := _peek_rect()
+	var c := r.get_center()
+	var R := r.size.x * 0.5
+	var active := _peek_owner != -1
+	var a := 0.55 if active else 0.3
+	draw_circle(c, R, Color(1, 1, 1, 0.14 if active else 0.07))
+	draw_arc(c, R, 0, TAU, 32, Color(1, 1, 1, a + 0.15), 2.0)
+	for ang: float in [0.0, PI * 0.5, PI, PI * 1.5]:
+		var dir := Vector2(cos(ang), sin(ang))
+		var tip := c + dir * R * 0.9
+		var side := Vector2(-dir.y, dir.x) * R * 0.11
+		var back := c + dir * R * 0.74
+		draw_colored_polygon(PackedVector2Array([tip, back + side, back - side]), Color(1, 1, 1, a))
+	var kd := get_rect().size.y * 0.085
+	var kc := c + Vector2(_peek_v.x, -_peek_v.y) * _peek_reach()
+	PixelArt.draw_round_button(self, Rect2(kc - Vector2(kd, kd) * 0.5, Vector2(kd, kd)), "kamera", active)
+
+
 # ---------- Joystick yerleşimi ----------
 
 func _joy_radius() -> float:
@@ -346,11 +435,13 @@ func _draw() -> void:
 			PixelArt.draw_round_button(self, bl[name][0], bl[name][1], _pressed.has(name), Color(1.0, 0.82, 0.25), col)
 		return
 	if SkateInput.on_foot:
-		var mb := _move_base if _gesture_owner != -1 else _move_rest()
-		_draw_stick(mb, _move_knob, _gesture_owner != -1, r)
-		var cb := _joy_base if _joy_owner != -1 else _joy_rest()
-		_draw_stick(cb, _joy_knob, _joy_owner != -1, r * 0.85, true)
+		# Müzik çalar elde: yürüme durur, joystick gizli
+		if not (player and player.music_open):
+			var mb := _move_base if _gesture_owner != -1 else _move_rest()
+			_draw_stick(mb, _move_knob, _gesture_owner != -1, r)
 	else:
+		if _peek_on():
+			_draw_peek()
 		# Ayak hareketi göstergesi
 		if _gesture_owner != -1 and _touches.has(_gesture_owner):
 			var t: Dictionary = _touches[_gesture_owner]

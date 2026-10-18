@@ -1,0 +1,4 @@
+{
+	"_aciklama": "Oyun içi radyo. Her istasyon: ad, isteğe bağlı kapak (res:// resim), şarkılar: [{dosya: res://assets/radyo/... .ogg|.mp3|.wav, ad, sanatci}]. Örnek: {\"ad\": \"KAYKAY FM\", \"kapak\": \"\", \"sarkilar\": [{\"dosya\": \"res://assets/radyo/kaykay_fm/parca1.ogg\", \"ad\": \"PARÇA ADI\", \"sanatci\": \"SANATÇI\"}]}",
+	"istasyonlar": []
+}
