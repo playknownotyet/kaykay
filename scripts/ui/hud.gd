@@ -223,6 +223,21 @@ func _build() -> void:
 	box.add_theme_constant_override("separation", 6)
 	scroll.add_child(box)
 
+	# Kaykay kontrol eli (sağlak / solak): itme ve direksiyon tarafları, animasyonlar aynalı
+	var el_row := HBoxContainer.new()
+	box.add_child(el_row)
+	var el_label := Label.new()
+	el_label.text = "Kaykay eli:"
+	el_row.add_child(el_label)
+	var el_option := OptionButton.new()
+	el_option.add_item("Sağlak (itme sağda)", 0)
+	el_option.add_item("Solak (itme solda)", 1)
+	el_option.selected = 0 if SkateInput.sag_el else 1
+	el_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	el_option.item_selected.connect(func(i: int): SkateInput.set_sag_el(i == 0))
+	SkateInput.el_changed.connect(func(v: bool): el_option.selected = 0 if v else 1)
+	el_row.add_child(el_option)
+
 	# Direksiyon modu
 	var mode_row := HBoxContainer.new()
 	box.add_child(mode_row)

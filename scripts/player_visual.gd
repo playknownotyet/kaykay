@@ -237,12 +237,42 @@ func _align(delta: float) -> void:
 
 # ---------- Animasyon ----------
 
+## Aynalanan kaykay animasyonları (tools/blender/karakter_rig.py AYNALANACAK ile aynı)
+const AYNA := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "push", "push_ret",
+	"ride_tuck", "brake", "crouch", "air", "ollie", "flip", "grind", "grind_down", "mount",
+	"dismount", "sarsil", "dus", "tutun"]
+var _anim_orig := {}
+var _anim_ayna := {}
+
+
+## Sağlakta aynalı, solakta özgün animasyonlar aynı adla kütüphaneye konur (ağaç adla bulur)
+func _apply_handedness(sag: bool) -> void:
+	var lib := _anim.get_animation_library("")
+	for n in _anim_orig:
+		var a: Animation = _anim_ayna.get(n) if sag and _anim_ayna.has(n) else _anim_orig[n]
+		if lib.get_animation(n) == a:
+			continue
+		lib.remove_animation(n)
+		lib.add_animation(n, a)
+
 func _setup_animation() -> void:
 	_anim = _model.find_child("AnimationPlayer", true, false)
 	for n in LOOPING:
 		if _anim.has_animation(n):
 			_anim.get_animation(n).loop_mode = Animation.LOOP_LINEAR
 	_push_len = _anim.get_animation("push").length
+	# El tercihi: sağlakta kaykay animasyonlarının aynalı kopyaları (<ad>_ayna) aynı adla oynar
+	var lib := _anim.get_animation_library("")
+	for n in AYNA:
+		if lib.has_animation(n):
+			_anim_orig[n] = lib.get_animation(n)
+		if lib.has_animation(n + "_ayna"):
+			var m := lib.get_animation(n + "_ayna")
+			if n in LOOPING:
+				m.loop_mode = Animation.LOOP_LINEAR
+			_anim_ayna[n] = m
+	_apply_handedness(SkateInput.sag_el)
+	SkateInput.el_changed.connect(_apply_handedness)
 
 	var bt := AnimationNodeBlendTree.new()
 	var tr := AnimationNodeTransition.new()

@@ -17,6 +17,7 @@ Kaykay pozlarında ayaklar kaykay yüzeyinde (z = DECK_TOP), zemin z = 0.
 """
 import math
 import os
+import copy
 import sys
 
 import bpy
@@ -355,6 +356,9 @@ def apply_pose(arm_obj, pose):
 
 
 def key_pose(arm_obj, frame, pose):
+    # Aynalı kopyalar için kaydet (make_mirrored_actions)
+    ad = arm_obj.animation_data.action.name if arm_obj.animation_data and arm_obj.animation_data.action else ""
+    KAYIT.setdefault(ad, []).append((frame, copy.deepcopy(pose)))
     apply_pose(arm_obj, pose)
     for p in arm_obj.pose.bones:
         p.keyframe_insert("location", frame=frame)
@@ -366,6 +370,68 @@ def key_pose(arm_obj, frame, pose):
         bc = arm_obj.pose.bones["canta"].constraints.get("El")
         if bc:
             bc.keyframe_insert("influence", frame=frame)
+
+
+# ---------------------------------------------------------------------------
+# Aynalı (sağlak) kaykay animasyonları: oyunda "Sağlak" seçilince bunlar oynar (adı + "_ayna").
+# Her pozu key_pose kaydeder (KAYIT); aynası: sol / sağ yer değiştirir, yana konumlar (x) ve yana
+# dönüşler (y, z) ters çevrilir. Sola / sağa dönüş animasyonları yer değiştirir. Binme / inmede
+# kollar aynalanmaz: kaykay yürürken sağ elde taşınır, sağ elden alınıp sağ ele geri verilir.
+# ---------------------------------------------------------------------------
+KAYIT = {}
+AYNALANACAK = ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "push", "push_ret",
+               "ride_tuck", "brake", "crouch", "air", "ollie", "flip", "grind", "grind_down", "mount",
+               "dismount", "sarsil", "dus", "tutun"]
+AYNA_KAYNAK = {"ride_turn_l": "ride_turn_r", "ride_turn_r": "ride_turn_l"}
+KOL_SABIT = ("mount", "dismount")
+
+
+def _ayna_konum(v):
+    return (-v[0], v[1], v[2])
+
+
+def _ayna_donus(r):
+    # Ayna düzlemi (YZ) yerel X eksenine dik: X etrafındaki dönüş aynı, Y ve Z ters
+    return (r[0], -r[1], -r[2])
+
+
+def mirror_pose(p, keep_arms=False):
+    out = {}
+    for k, v in p.items():
+        side = None
+        base = k
+        if k.endswith(".L") or k.endswith(".R"):
+            base, side = k[:-2], k[-1]
+        if keep_arms and base in ("hand", "hand_rot", "elbow"):
+            out[k] = v
+            continue
+        nk = (base + "." + ("R" if side == "L" else "L")) if side else k
+        if base in ("hips", "board", "foot", "hand", "knee", "elbow"):
+            nv = _ayna_konum(v)
+        elif base == "foot_rot":
+            nv = (v[0], -v[1], -v[2])
+        elif base == "board_raw":
+            nv = (_ayna_konum(v[0]), _ayna_donus(v[1]))
+        elif base.endswith("_rot"):
+            nv = _ayna_donus(v)
+        else:
+            nv = v
+        out[nk] = nv
+    return out
+
+
+def make_mirrored_actions(arm_obj):
+    names = []
+    for name in AYNALANACAK:
+        src = AYNA_KAYNAK.get(name, name)
+        keys = KAYIT.get(src)
+        if not keys:
+            continue
+        new_action(arm_obj, name + "_ayna")
+        for f, p in keys:
+            key_pose(arm_obj, f, mirror_pose(p, keep_arms=name in KOL_SABIT))
+        names.append(name + "_ayna")
+    return names
 
 
 def new_action(arm_obj, name):
@@ -1842,6 +1908,7 @@ def main():
     add_bag_bones(arm_obj)
     add_music_bones(arm_obj)
     acts = make_actions(arm_obj)
+    acts += make_mirrored_actions(arm_obj)
     bpy.context.scene.render.fps = FPS
 
     if PREVIEW_DIR:

@@ -4,6 +4,7 @@ extends Control
 ## Kaykaydayken:
 ##   Sol yarı (ayak): aşağı sürt = it, iterken yana kaydır = dön, yukarı sürt = fren / geri it
 ##   Sağ yarı (el): yüzen joystick (x = direksiyon); hızlıca yukarı fırlat = ollie
+##   (Sağlak ayarında yarılar yer değiştirir: ayak sağda, direksiyon solda; SkateInput.sag_el)
 ##   İkon butonlar: kaykaydan in (sağ üst), arabaya tutun / bırak (yalnız uygunken)
 ##   Bakış joystick'i (inme butonunun altında, kamera ikonlu): hangi yöne çekilirse o yana bakar, bırakınca
 ##   kendiliğinden ortaya döner (kısa bakışlar için)
@@ -168,7 +169,7 @@ func _on_press(index: int, pos: Vector2) -> void:
 			return
 	var size := get_rect().size
 	var t := {
-		"zone": Zone.LEFT if pos.x < size.x * 0.5 else Zone.RIGHT,
+		"zone": Zone.LEFT if _foot_side(pos, size) else Zone.RIGHT,
 		"start": pos,
 		"pos": pos,
 		"time": _now(),
@@ -396,7 +397,19 @@ func _joy_rest() -> Vector2:
 	if SkateInput.on_foot:
 		# Kamera joystick'i sağ altta dinlenir (butonlar üstünde)
 		return Vector2(size.x - r * 1.6, size.y - r * 1.4)
+	# Kaykayda direksiyon: solakta sağ altta, sağlakta sol altta
+	if SkateInput.sag_el:
+		return Vector2(r * 1.9, size.y - r * 1.7)
 	return Vector2(size.x - r * 1.9, size.y - r * 1.7)
+
+
+## Dokunuş "ayak" (Zone.LEFT: kaykayda itme / fren, yayada yürüme) tarafında mı?
+## Yayada her zaman sol yarı; kaykayda solakta sol, sağlakta sağ yarı
+func _foot_side(pos: Vector2, size: Vector2) -> bool:
+	var left := pos.x < size.x * 0.5
+	if SkateInput.on_foot or not SkateInput.sag_el:
+		return left
+	return not left
 
 
 func _move_rest() -> Vector2:
@@ -408,6 +421,8 @@ func _move_rest() -> Vector2:
 func _clamp_base(pos: Vector2) -> Vector2:
 	var size := get_rect().size
 	var r := _joy_radius()
+	if SkateInput.sag_el and not SkateInput.on_foot:
+		return Vector2(clampf(pos.x, r * 1.1, size.x * 0.5 - r), clampf(pos.y, r * 1.1, size.y - r * 1.1))
 	return Vector2(clampf(pos.x, size.x * 0.5 + r, size.x - r * 1.1), clampf(pos.y, r * 1.1, size.y - r * 1.1))
 
 

@@ -52,6 +52,15 @@ var foot_contact := false        # ayak şu an yere basıp itiyor mu
 var foot_speed := 0.0            # ayağın yere göre hızı (m/sn), itme yönünde pozitif
 var brake := 0.0                 # 0..1
 
+# --- El tercihi (kaykay üstü) ---
+## true: sağlak (itme / fren sağ yarıda, direksiyon solda; karakter sağ ayakla iter, animasyonlar
+## aynalı). false: solak (sol yarıda itme, sol ayakla iter; ilk tasarım). Yayada değişen bir şey yok.
+## user://kontrol.cfg'de saklanır; hiç seçilmediyse oyun ilk açılışta sorar (el_secimi.gd).
+var sag_el := true
+var el_secildi := false
+signal el_changed(sag: bool)
+const KONTROL_CFG := "user://kontrol.cfg"
+
 # --- Kontrolcü yazar ---
 var board_speed := 0.0
 var on_foot := false             # yürürken ayak hareketleri ve klavye itme kapalı
@@ -72,6 +81,26 @@ var _kb_cooldown := 0.0
 const KB_STROKE_TIME := 0.28
 const KB_RECOVER_TIME := 0.3
 const KB_FOOT_SPEED := 10.4
+
+
+func _ready() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(KONTROL_CFG) == OK and cfg.has_section_key("kontrol", "el"):
+		sag_el = String(cfg.get_value("kontrol", "el", "sag")) == "sag"
+		el_secildi = true
+
+
+## El tercihini değiştir ve sakla (ayarlar ve ilk açılış sorusu)
+func set_sag_el(v: bool) -> void:
+	el_secildi = true
+	var cfg := ConfigFile.new()
+	cfg.load(KONTROL_CFG)
+	cfg.set_value("kontrol", "el", "sag" if v else "sol")
+	cfg.save(KONTROL_CFG)
+	if v == sag_el:
+		return
+	sag_el = v
+	el_changed.emit(v)
 
 
 # ---------- Dokunmatik arayüzün çağırdığı fonksiyonlar ----------

@@ -1003,6 +1003,10 @@ func toggle_music() -> void:
 	if music_open:
 		if on_foot and action_time > 0.0:
 			return
+		# Cihaz hiç açılmadan (güç kapalı) cebe konuyorsa kulaklıklar da çıkar
+		if not music_power and earbuds_in:
+			music_put_away_off()
+			return
 		music_open = false
 		if on_foot:
 			play_action("muzik_koy", MUZIK_KOY_TIME)
