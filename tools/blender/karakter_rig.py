@@ -381,7 +381,7 @@ def key_pose(arm_obj, frame, pose):
 KAYIT = {}
 AYNALANACAK = ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "push", "push_ret",
                "ride_tuck", "brake", "crouch", "air", "ollie", "flip", "grind", "grind_down", "mount",
-               "dismount", "sarsil", "dus", "tutun"]
+               "dismount", "sarsil", "dus", "tutun", "ucus"]
 AYNA_KAYNAK = {"ride_turn_l": "ride_turn_r", "ride_turn_r": "ride_turn_l"}
 KOL_SABIT = ("mount", "dismount")
 
@@ -1194,6 +1194,26 @@ def make_actions(arm_obj):
              elbow_R=(0.45, -0.2, -0.05), elbow_L=(-0.45, -0.3, 0.05))
         p["hand_rot.L"] = (-15, 0, 30)
         p["hand_rot.R"] = (-15, 0, -30)
+        key_pose(arm_obj, f, p)
+
+    # --- Rampa uçuşu / duvar sürtünmesi: derin çökme, kaykay dizlere çekili, iki el kaykayı
+    #     parmak tarafı kenarından tutar (sağ el ön ayağın önünden, sol el arka ayağın arkasından).
+    #     Godot'ta rampadan uçunca ve duvarda kayarken yere değene kadar döner. ---
+    act("ucus")
+    for f, k in ((0, 0.0), (15, 1.0), (30, 0.0)):
+        c = 0.4 + 0.01 * k
+        dz = 0.17 + 0.012 * k
+        p = side_base(crouch=c, dz=dz, spine_rot=(55 + 2 * k, -6, 0), chest_rot=(18, -4, 0),
+                      neck_rot=(-24, -20, 0), head_rot=(-26, -28, 0))
+        p["board"] = (0, 0, dz)
+        p["knee.R"] = knee_pole(p["foot.R"], SIDE_YAW, along=-0.16, z=0.75 + dz)
+        p["knee.L"] = knee_pole(p["foot.L"], SIDE_YAW, along=0.12, z=0.75 + dz)
+        p["hand.R"] = (0.12, -0.3, D + dz + 0.01)
+        p["hand.L"] = (0.12, 0.32, D + dz + 0.01)
+        p["elbow.R"] = (0.5, -0.6, 0.45 + dz)
+        p["elbow.L"] = (0.5, 0.6, 0.45 + dz)
+        p["hand_rot.R"] = (70, 0, -20)
+        p["hand_rot.L"] = (70, 0, 20)
         key_pose(arm_obj, f, p)
 
     # --- Grind (düz ray / kenar): alçak, gövde öne-rayın üstüne eğik, kollar iki yana

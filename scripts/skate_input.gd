@@ -55,8 +55,8 @@ var brake := 0.0                 # 0..1
 # --- El tercihi (kaykay üstü) ---
 ## true: sağlak (itme / fren sağ yarıda, direksiyon solda; karakter sağ ayakla iter, animasyonlar
 ## aynalı). false: solak (sol yarıda itme, sol ayakla iter; ilk tasarım). Yayada değişen bir şey yok.
-## user://kontrol.cfg'de saklanır; hiç seçilmediyse oyun ilk açılışta sorar (el_secimi.gd).
-var sag_el := true
+## user://kontrol.cfg'de saklanır; varsayılan solak (ayarlardan değiştirilir).
+var sag_el := false
 var el_secildi := false
 signal el_changed(sag: bool)
 const KONTROL_CFG := "user://kontrol.cfg"
@@ -68,6 +68,7 @@ var on_foot := false             # yürürken ayak hareketleri ve klavye itme ka
 var _ollie_requested := false
 var _board_toggle_requested := false
 var _skitch_requested := false
+var _rampa_requested := false
 var _finger_hps := 0.0           # parmak hızı, ekran yüksekliği/sn (itme yönünde +)
 var _last_finger_update := 0.0
 var _joystick := Vector2.ZERO
@@ -187,6 +188,17 @@ func set_peek(v: Vector2) -> void:
 	peek = v.limit_length(1.0)
 
 
+## Rampa yeteneği (RampaYetenek tüketir)
+func request_rampa() -> void:
+	_rampa_requested = true
+
+
+func consume_rampa() -> bool:
+	var r := _rampa_requested
+	_rampa_requested = false
+	return r
+
+
 ## Arabanın arkasına tutun / bırak
 func request_skitch() -> void:
 	_skitch_requested = true
@@ -272,6 +284,8 @@ func _input(event: InputEvent) -> void:
 			request_board_toggle()
 		elif event.physical_keycode == KEY_Q:
 			request_skitch()
+		elif event.physical_keycode == KEY_R:
+			request_rampa()
 
 
 func _update_keyboard(delta: float) -> void:

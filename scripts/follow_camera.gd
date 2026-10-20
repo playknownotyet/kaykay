@@ -56,6 +56,11 @@ var speed01 := 0.0
 var _yaw := 0.0
 var _look := Vector3.ZERO
 var _shake := 0.0
+
+
+## Dışarıdan kısa sarsıntı (ör. yerden rampa çıkınca)
+func add_shake(a: float) -> void:
+	_shake = maxf(_shake, a)
 var _noise := FastNoiseLite.new()
 var _time := 0.0
 var _bump := 0.0        # dikey sekme (m)

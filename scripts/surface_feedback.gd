@@ -17,6 +17,7 @@ const ROLL := {
 	"tahta": {"spacing": 0.61, "amp": 0.14, "vary": 0.3, "cam": 0.003, "bump": 0.0015}, # kontrplak ekleri
 	"metal": {"spacing": 0.0, "amp": 0.0, "vary": 0.0, "cam": 0.003, "bump": 0.0},
 	"cim": {"spacing": 0.3, "amp": 0.16, "vary": 0.7, "cam": 0.006, "bump": 0.002},
+	"kaya": {"spacing": 0.4, "amp": 0.24, "vary": 0.6, "cam": 0.008, "bump": 0.003},   # yerden çıkan rampa
 }
 ## Grind profilleri. hz: vızıltı sıklığı, start: ilk temas ("klank") şiddeti
 const GRIND := {

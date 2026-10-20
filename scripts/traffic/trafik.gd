@@ -470,6 +470,33 @@ func _decide(car: Araba, t: float, coarse := false) -> void:
 					why = "yaya"
 				break
 
+	# Yerden çıkan rampalar: yolu kesiyorsa önünde durup batmasını bekler
+	for rp: Rampa in Rampa.aktif:
+		if not is_instance_valid(rp) or not rp.engel_mi():
+			continue
+		var a := rp.global_transform * Vector3(0, 0, -0.5)
+		var b := rp.global_transform * Vector3(0, 0, rp.L + rp.H * 0.5 + 0.5)
+		var mid := (a + b) * 0.5
+		var rel := mid - pos
+		if rel.length_squared() > (horizon + rp.L) * (horizon + rp.L) or rel.dot(car.fwd) < -rp.L:
+			continue
+		var rad := rp.W * 0.5 + 1.3
+		var ab := Vector2(b.x - a.x, b.z - a.z)
+		for i in n_s:
+			var q := sp[i]
+			if absf(q.y - mid.y) > 3.0:
+				continue
+			var aq := Vector2(q.x - a.x, q.z - a.z)
+			var u := clampf(aq.dot(ab) / maxf(ab.length_squared(), 0.01), 0.0, 1.0)
+			if (aq - ab * u).length_squared() < rad * rad:
+				var g: float = sd[i] - car.half.z - 1.5
+				if g < gap:
+					gap = maxf(g, 0.05)
+					lead_v = 0.0
+					blocker = null
+					why = "rampa"
+				break
+
 	car.cached_vmax = vmax
 	car.cached_gap = gap
 	car.cached_lead_v = lead_v

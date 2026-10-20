@@ -244,3 +244,32 @@ def horn(sec, freqs, beeps):
     return x * lowpass(gate, 60)
 save("korna_1", horn(0.7, [415, 523], [(0.0, 0.45)]), 0.7)
 save("korna_2", horn(0.75, [370, 466], [(0.0, 0.14), (0.24, 0.6)]), 0.7)
+
+# ---------- Rampa: yerden toprak / kaya kütlesi çıkar (gürleme + çatırtı + taş sesleri) ----------
+def rampa_sesi(sec, guc):
+    tt = t(sec)
+    # Derin gürleme: alçak geçirilmiş kahverengi gürültü, hızla yükselip yavaş söner
+    rum = lowpass(brown(sec), 140) * env(sec, 0.04, sec * 0.35) * 2.5
+    rum += np.sin(2 * math.pi * (48 - 14 * tt / sec) * tt) * env(sec, 0.03, sec * 0.3) * 0.6
+    # Zemin kırılması: kısa, kalın çatırtılar (ilk yarı)
+    crack = np.zeros_like(tt)
+    for _ in range(int(14 * guc)):
+        j = int(rng.uniform(0.0, sec * 0.55) ** 1.3 * SR)
+        n = int(rng.uniform(0.03, 0.09) * SR)
+        if j + n >= len(crack):
+            continue
+        seg = bandpass(noise(n / SR), rng.uniform(350, 1400), 1.2) * env(n / SR, 0.001, rng.uniform(0.01, 0.03))
+        crack[j:j + len(seg)] += seg * rng.uniform(0.4, 1.0)
+    # Düşen taşlar / toprak serpintisi (sonda)
+    peb = np.zeros_like(tt)
+    for _ in range(int(40 * guc)):
+        j = int(rng.uniform(sec * 0.25, sec * 0.95) * SR)
+        n = int(0.025 * SR)
+        if j + n >= len(peb):
+            continue
+        seg = highpass(noise(n / SR), 1800) * env(n / SR, 0.0005, rng.uniform(0.003, 0.008))
+        peb[j:j + len(seg)] += seg * rng.uniform(0.1, 0.45)
+    return np.tanh((rum + crack * 1.6 + peb) * 1.3)
+
+save("rampa", rampa_sesi(1.4, 1.0), 0.95)
+save("rampa_bat", rampa_sesi(1.0, 0.5), 0.8)

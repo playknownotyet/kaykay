@@ -1232,9 +1232,21 @@ func _build_bina(it: Dictionary, sb: SurfaceTool) -> void:
 		var rp := [xf * Vector3(-hw, top + 0.05, -hd), xf * Vector3(hw, top + 0.05, -hd), xf * Vector3(hw, top + 0.05, hd), xf * Vector3(-hw, top + 0.05, hd)]
 		_quad(sb, rp, [Vector2(0, 0), Vector2(w / 3.0, 0), Vector2(w / 3.0, d / 3.0), Vector2(0, d / 3.0)], Vector3.UP, _fc(style, 0, 4))
 		_roof_props(xf, w, d, top, seed)
-	# Çarpışma
+	# Çarpışma: gövde görünen çatı düzeyine kadar; düz çatıda üstünde korkuluk duvarları (çatıda
+	# durulabilir, korkuluğun içinde yürünür / kayılır), beşik çatıda eğimli çatı prizması
 	var body := _body("beton")
-	_shape_box(body, Vector3(w, top - ybot + 0.7, d), xf * Transform3D(Basis(), Vector3(0, (top + 0.7 + ybot) * 0.5, 0)))
+	var roof_y := top if gable else top + 0.05
+	_shape_box(body, Vector3(w, roof_y - ybot, d), xf * Transform3D(Basis(), Vector3(0, (roof_y + ybot) * 0.5, 0)))
+	if gable:
+		_gable_shape(body, xf, w, d, top)
+	else:
+		var ph := 0.65
+		var pt := 0.22
+		var pyc := roof_y + ph * 0.5
+		_shape_box(body, Vector3(w, ph, pt), xf * Transform3D(Basis(), Vector3(0, pyc, d * 0.5 - pt * 0.5)))
+		_shape_box(body, Vector3(w, ph, pt), xf * Transform3D(Basis(), Vector3(0, pyc, -d * 0.5 + pt * 0.5)))
+		_shape_box(body, Vector3(pt, ph, d - pt * 2.0), xf * Transform3D(Basis(), Vector3(w * 0.5 - pt * 0.5, pyc, 0)))
+		_shape_box(body, Vector3(pt, ph, d - pt * 2.0), xf * Transform3D(Basis(), Vector3(-w * 0.5 + pt * 0.5, pyc, 0)))
 	# Özel binaların süsleri ve tabelaları
 	var ad := String(it.get("ad", spec.get("tabela", ""))).to_upper()
 	match tur:
@@ -1523,6 +1535,28 @@ func _deco_library(xf: Transform3D, hd: float, body: StaticBody3D) -> void:
 	for sx: float in [-1.0, 1.0]:
 		_box(_sd, xf, Vector3(sx * 1.75, 1.6, hd + 0.35), Vector3(0.45, 3.2, 0.45), _vc("#efe6d5"))
 		_box(_sd, xf, Vector3(sx * 1.75, 3.25, hd + 0.35), Vector3(0.65, 0.2, 0.65), _vc("#e2d6bf"))
+
+
+## Beşik çatının çarpışması: duvar üstünden mahyaya üçgen prizma (saçaklar hariç)
+func _gable_shape(body: StaticBody3D, xf: Transform3D, w: float, d: float, top: float) -> void:
+	var along_x := w >= d
+	var L := w if along_x else d
+	var S := d if along_x else w
+	var rh := S * 0.32
+	var ax := Vector3(1, 0, 0) if along_x else Vector3(0, 0, 1)
+	var sx := Vector3(0, 0, 1) if along_x else Vector3(1, 0, 0)
+	var pts := PackedVector3Array()
+	for sg: float in [-1.0, 1.0]:
+		var e := ax * sg * L * 0.5
+		pts.append(e - sx * S * 0.5 + Vector3(0, top, 0))
+		pts.append(e + sx * S * 0.5 + Vector3(0, top, 0))
+		pts.append(e + Vector3(0, top + rh, 0))
+	var sh := ConvexPolygonShape3D.new()
+	sh.points = pts
+	var cs := CollisionShape3D.new()
+	cs.shape = sh
+	cs.transform = xf
+	body.add_child(cs)
 
 
 ## Beşik çatı: mahya uzun kenar boyunca, kiremit; alınlıklar düz duvar

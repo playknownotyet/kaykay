@@ -20,6 +20,9 @@ signal knocked_down                 # araba çarptı: düşer, kalkar, kendiliğ
 signal skitch_changed(on: bool)     # arabanın arkasına tutundu / bıraktı
 signal action_started(name: String) # tek seferlik eylem (çantaya atma vb.)
 signal context_action(id: String)   # bağlam butonu (soygun başlat, al ...) basıldı
+signal ramp_launched(perfect: bool)  # rampa dudağından fırladı (perfect: zıplama zamanlaması tuttu)
+signal wallride_changed(on: bool)    # rampa uçuşunda duvara yapıştı / ayrıldı
+signal mantled                       # havada çatı / duvar kenarına tutunup üstüne çıktı
 signal auto_hopped                  # kaldırım önünde kendiliğinden küçük zıplama
 signal inventory_changed
 signal sat_down
@@ -130,6 +133,26 @@ var grind_time := 0.0
 var grind_dir := Vector3.FORWARD    # 3D gidiş yönü (eğimli raylarda eğik)
 var on_foot := false                # kaykaydan inmiş, yürüyor
 var floor_surface := "asfalt"       # üstünde olunan yüzey türü (level_builder "surface" bilgisi)
+var floor_body: Node = null         # son basılan zemin gövdesi (havalanınca da kalır; rampa itkisi bunu okur)
+
+# --- Rampa uçuşu ve duvar sürtünmesi (wallride) ---
+## Rampadan fırladıktan sonra yere değene kadar true: uçuş pozu, duvarda kayma bu sırada mümkün
+var ramp_flight := false
+var wallriding := false
+var wall_normal := Vector3.ZERO      # yapışılan duvarın yatay normali (duvardan dışa)
+var wall_dir := Vector3.ZERO         # duvar boyunca gidiş yönü (yatay)
+var _wall_speed := 0.0
+var _wall_block := 0.0               # duvardan atlayınca kısa süre yeniden yapışmasın
+var wall_end_reason := ""            # son duvar sürtünmesi neden bitti (hata ayıklama)
+var _since_ollie := 99.0             # son ollie'den beri (rampa zıplama asisti)
+var ramp_jump_queued := false        # rampa üstünde erken basıldı: dudakta zıplar
+## Duvarda: yerçekiminin bu oranı (yavaşça aşağı kayar), hız kaybı (m/sn²)
+@export var wall_gravity := 0.35
+@export var wall_friction := 1.0
+@export var wall_jump_out := 4.0
+@export var wall_jump_up := 5.0
+## Havada kenara tutunma: duvarın üst kenarı ayaklardan en çok bu kadar yukarıdaysa üstüne çıkar
+@export var mantle_reach := 1.4
 var stumble_time := 0.0             # > 0: sarsılma sürüyor (animasyon "sarsil", 24 kare)
 const STUMBLE_TIME := 0.8
 ## Sarsılma animasyonunda sol ayağın yerde olduğu aralık (sn, başlangıçtan): kaykay sürtünüp yavaşlar
@@ -201,6 +224,7 @@ const CAR_HIT_SPEED := 1.5
 var _rail_side := 1.0       # raya hangi yandan gelindi (+1 sağ, -1 sol; gidiş yönüne göre)
 
 const COYOTE_TIME := 0.1
+const RAMP_COYOTE := 0.25
 var _windup := -1.0          # >= 0: ollie hazırlığı sürüyor
 var _double_used := false
 var _jump_base_y := 0.0      # son kalkışın (yerden ayrılma) yüksekliği
@@ -226,6 +250,9 @@ func _ready() -> void:
 
 
 func respawn() -> void:
+	wallriding = false
+	ramp_flight = false
+	ramp_jump_queued = false
 	stand_up()
 	cancel_grind()
 	_end_skitch(false)
@@ -253,6 +280,8 @@ func _physics_process(delta: float) -> void:
 	_ollie_lock = maxf(_ollie_lock - delta, 0.0)
 	_last_rail_timer = maxf(_last_rail_timer - delta, 0.0)
 	_latch_block = maxf(_latch_block - delta, 0.0)
+	_wall_block = maxf(_wall_block - delta, 0.0)
+	_since_ollie += delta
 	if stumble_time > 0.0:
 		stumble_time = maxf(stumble_time - delta, 0.0)
 		var t := STUMBLE_TIME - stumble_time
@@ -336,6 +365,10 @@ func _physics_process(delta: float) -> void:
 
 	if grinding:
 		_grind_move(delta)
+		return
+
+	if wallriding:
+		_wall_move(delta)
 		return
 
 	if grounded:
@@ -445,21 +478,39 @@ func _handle_jump_input(delta: float) -> void:
 			if grounded or _coyote > 0.0:
 				_do_ollie()
 		return
+	# Rampa zıplama asisti: rampanın üstünde erken basıldıysa beklenir, çökme dudağa varmadan
+	# tam ollie_windup önce başlar ve sıçrama dudakta olur (mükemmel kalkış)
+	if ramp_jump_queued:
+		var r := floor_body as Rampa
+		if not grounded or r == null or not is_instance_valid(r) or r.durum == Rampa.Durum.BATIYOR:
+			ramp_jump_queued = false
+			if not grounded and _coyote > 0.0:
+				_do_ollie()
+			return
+		if r.dudaga_kalan(global_position) <= maxf(absf(speed), 1.0) * ollie_windup:
+			ramp_jump_queued = false
+			_windup = ollie_windup
+			ollie_started.emit()
+		return
 	if _ollie_buffer <= 0.0:
 		return
 	if grounded:
 		_ollie_buffer = 0.0
+		var r := floor_body as Rampa
+		if r and is_instance_valid(r) and r.durum != Rampa.Durum.BATIYOR and r.dudaga_kalan(global_position) > maxf(absf(speed), 1.0) * ollie_windup:
+			ramp_jump_queued = true
+			return
 		_windup = ollie_windup
 		ollie_started.emit()
 	elif _coyote > 0.0:
 		_do_ollie()
-	elif not _double_used and air_time > 0.12:
+	elif not _double_used and air_time > 0.04:
+		# Kickflip: düşene kadar her an; yükselişi kesmez. Ne zaman basılırsa basılsın zirveyi
+		# aynı kadar yükseltir: ollie yüksekliğinin double_jump_height katı
 		_ollie_buffer = 0.0
 		_double_used = true
-		# Toplam zirve = normal ollie zirvesinin double_jump_height katı (kalkış noktasına göre)
-		var ollie_peak := ollie_speed * ollie_speed / (2.0 * gravity)
-		var remaining := ollie_peak * double_jump_height - (global_position.y - _jump_base_y)
-		velocity.y = sqrt(2.0 * gravity * maxf(remaining, 0.08))
+		var up := maxf(velocity.y, 0.0)
+		velocity.y = sqrt(up * up + ollie_speed * ollie_speed * double_jump_height)
 		double_jumped.emit()
 
 
@@ -478,7 +529,130 @@ func _do_ollie() -> void:
 	velocity += Vector3.UP * ollie_speed
 	grounded = false
 	air_time = 0.0
+	_since_ollie = 0.0
 	ollied.emit()
+
+
+## Rampa dudağından fırlatma (Rampa çağırır). perfect: zıplama dudakta oldu, ek itki
+func ramp_launch(up: float, forward: float) -> void:
+	var hv := Vector3(velocity.x, 0.0, velocity.z)
+	var dir := hv.normalized() if hv.length() > 0.5 else heading
+	velocity += Vector3.UP * up + dir * forward
+	ramp_flight = true
+
+
+## Duvar sürtünmesi (wallride): rampa uçuşunda havadayken bir duvara değince
+func _start_wallride(nh: Vector3, pre_velocity: Vector3) -> void:
+	var t := Vector3.UP.cross(nh).normalized()
+	var hv := Vector3(pre_velocity.x, 0.0, pre_velocity.z)
+	var s := hv.dot(t)
+	if absf(s) < 0.6:
+		# Kafa kafaya: yüzün döndüğü (ya da direksiyonun) tarafa kay
+		s = heading.dot(t)
+		if absf(s) < 0.05:
+			s = -steer if absf(steer) > 0.1 else 1.0
+	wall_dir = t * signf(s)
+	wall_normal = nh
+	_wall_speed = maxf(hv.length() * 0.9, 6.0)
+	heading = wall_dir
+	velocity.y = clampf(pre_velocity.y, -2.0, 3.5)
+	wallriding = true
+	_double_used = false
+	ramp_jump_queued = false
+	wallride_changed.emit(true)
+
+
+func _end_wallride() -> void:
+	if not wallriding:
+		return
+	wallriding = false
+	_wall_block = 0.3
+	wallride_changed.emit(false)
+
+
+func _wall_move(delta: float) -> void:
+	air_time += delta
+	velocity.y -= gravity * wall_gravity * delta
+	_wall_speed = move_toward(_wall_speed, 0.0, wall_friction * delta)
+	heading = wall_dir
+	forward_on_ground = wall_dir
+	speed = _wall_speed
+	# Zıpla: duvardan dışa ve yukarı sek
+	if _ollie_buffer > 0.0:
+		_ollie_buffer = 0.0
+		velocity = wall_dir * _wall_speed + wall_normal * wall_jump_out + Vector3.UP * (maxf(velocity.y, 0.0) + wall_jump_up)
+		heading = (wall_dir + wall_normal * 0.5).normalized()
+		_end_wallride()
+		_since_ollie = 0.0
+		_jump_base_y = global_position.y
+		ollied.emit()
+		return
+	velocity = wall_dir * _wall_speed + Vector3.UP * velocity.y - wall_normal * 1.5
+	floor_snap_length = 0.0
+	var pre := velocity
+	move_and_slide()
+	if is_on_floor():
+		# Yere indi: normal sürüş, yön duvar boyunca
+		_end_wallride()
+		ramp_flight = false
+		grounded = true
+		var n := get_floor_normal()
+		ground_normal = n
+		speed = _wall_speed
+		air_time = 0.0
+		landed.emit(maxf(-pre.dot(n), 0.0))
+		return
+	# Duvar bitti mi (bina köşesi, kapı boşluğu)? Bittiyse havada devam
+	var space := get_world_3d().direct_space_state
+	var from := global_position + Vector3.UP * 0.7
+	var q := PhysicsRayQueryParameters3D.create(from, from - wall_normal * 0.8, collision_mask, [get_rid()])
+	var hit := space.intersect_ray(q)
+	if hit.is_empty() or absf((hit.normal as Vector3).y) > 0.4 or _wall_speed < 1.5:
+		wall_end_reason = "duvar yok" if hit.is_empty() else ("normal %s" % hit.normal if _wall_speed >= 1.5 else "yavas")
+		velocity = wall_dir * _wall_speed + Vector3.UP * velocity.y + wall_normal * 0.5
+		_end_wallride()
+		return
+	# Hafif kıvrılan duvarlarda normali izle
+	var nh := Vector3((hit.normal as Vector3).x, 0.0, (hit.normal as Vector3).z).normalized()
+	if nh.dot(wall_normal) > 0.85:
+		wall_normal = nh
+		wall_dir = (wall_dir - nh * wall_dir.dot(nh)).normalized()
+	if global_position.y < -1.5:
+		_end_wallride()
+		respawn()
+
+
+## Havada bir duvara değince üst kenarı yakınsa (çatı, alçak duvar) üstüne çıkar
+func _try_mantle(nh: Vector3, pre_velocity: Vector3) -> bool:
+	if velocity.y < -9.0:
+		return false
+	var p := global_position
+	var space := get_world_3d().direct_space_state
+	var ahead := p - nh * 0.45
+	var top := Vector3(ahead.x, p.y + mantle_reach + 0.3, ahead.z)
+	var q := PhysicsRayQueryParameters3D.create(top, Vector3(ahead.x, p.y - 0.05, ahead.z), collision_mask, [get_rid()])
+	var hit := space.intersect_ray(q)
+	if hit.is_empty() or (hit.normal as Vector3).y < 0.75 or hit.collider is Araba or (hit.collider as Node).has_meta("gorunmez"):
+		return false
+	var lift: float = (hit.position as Vector3).y - p.y
+	if lift <= 0.05 or lift > mantle_reach:
+		return false
+	# Üstü boş mu (kafa çarpmasın)
+	var up_q := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 0.2, p + Vector3.UP * (lift + 1.7), collision_mask, [get_rid()])
+	if not space.intersect_ray(up_q).is_empty():
+		return false
+	global_position = Vector3(p.x, (hit.position as Vector3).y + 0.06, p.z) - nh * 0.3
+	velocity.y = maxf(velocity.y, 0.0) * 0.3
+	# Çarpmada kesilen hız geri gelir: kenarın üstünden içeri doğru sürmeye devam
+	var hv := Vector3(pre_velocity.x, 0.0, pre_velocity.z)
+	var inward := hv.dot(-nh)
+	if inward < 2.5:
+		hv += -nh * (2.5 - inward)
+	velocity.x = hv.x
+	velocity.z = hv.z
+	heading = hv.normalized()
+	mantled.emit()
+	return true
 
 
 func _after_move(pre_velocity: Vector3) -> void:
@@ -488,6 +662,7 @@ func _after_move(pre_velocity: Vector3) -> void:
 	if grounded:
 		_double_used = false
 	if grounded and not was_grounded:
+		ramp_flight = false
 		var n := get_floor_normal()
 		var fwd := _project_on_plane(heading, n)
 		var impact := maxf(-pre_velocity.dot(n), 0.0)
@@ -500,11 +675,12 @@ func _after_move(pre_velocity: Vector3) -> void:
 		# Rampadan uçtu veya kenardan düştü: zemine bastırmayı geri al,
 		# kısa süre yine ollie yapılabilir
 		velocity += ground_normal * ground_stick
-		_coyote = COYOTE_TIME
+		# Rampa dudağından çıkınca geç basılan zıplama da sayılır (zamanlama asisti)
+		_coyote = RAMP_COYOTE if floor_body is Rampa else COYOTE_TIME
 		air_time = 0.0
 
 	_update_floor_surface()
-	_handle_walls()
+	_handle_walls(pre_velocity)
 
 
 ## Yerdeki gövdenin yüzey türünü oku (titreşim ve kamera hissi bunu kullanır).
@@ -514,6 +690,7 @@ func _update_floor_surface() -> void:
 		var c := get_slide_collision(i)
 		if c.get_normal().y >= wall_dot:
 			var body := c.get_collider() as Node
+			floor_body = body
 			if body:
 				floor_surface = body.get_meta("surface", "asfalt")
 				# Şehrin boyadığı arazi (bina önleri, ara sokaklar) Arnavut kaldırımı
@@ -527,7 +704,7 @@ func grind_surface() -> String:
 	return _rail.surface if _rail else "metal"
 
 
-func _handle_walls() -> void:
+func _handle_walls(pre_velocity := Vector3.ZERO) -> void:
 	var worst := Vector3.ZERO
 	var worst_into := 0.0
 	var wall_dot := cos(floor_max_angle)
@@ -559,6 +736,14 @@ func _handle_walls() -> void:
 		if n.y >= wall_dot or n.y < -0.5:
 			continue
 		var nh := Vector3(n.x, 0.0, n.z).normalized()
+		# Havada: kenara tutunup üstüne çık; rampa uçuşundaysa duvarda sürtün
+		var cb := col.get_collider() as Node
+		if not grounded and not car and not (cb is Rampa) and not (cb and cb.has_meta("gorunmez")):
+			if _try_mantle(nh, pre_velocity):
+				return
+			if ramp_flight and _wall_block <= 0.0 and absf(n.y) < 0.35:
+				_start_wallride(nh, pre_velocity)
+				return
 		var into := -heading.dot(nh) * signf(speed if grounded else 1.0)
 		if into > worst_into:
 			worst_into = into

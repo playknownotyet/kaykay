@@ -132,7 +132,7 @@ func _process(delta: float) -> void:
 	var wind := 0.0 if inside else smoothstep(4.0, 16.0, v) * 0.85 + (0.12 if not player.grounded and v > 5.0 else 0.0)
 	_loop("ruzgar", wind, 0.85 + 0.35 * clampf(v / 16.0, 0.0, 1.0), delta, 3.0)
 	# Tekerlek (zemin türüne göre)
-	var rough := player.floor_surface in ["arnavut", "cim"]
+	var rough := player.floor_surface in ["arnavut", "cim", "kaya"]
 	var roll_k := clampf(speed / 7.0, 0.0, 1.0) * 0.8 if rolling else 0.0
 	var roll_pitch := 0.65 + 0.7 * clampf(speed / 13.0, 0.0, 1.0)
 	_loop("tekerlek_asfalt", 0.0 if rough else roll_k, roll_pitch, delta, 10.0)

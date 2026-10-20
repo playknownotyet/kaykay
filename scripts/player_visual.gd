@@ -19,8 +19,11 @@ extends Node3D
 const MODEL := preload("res://assets/karakter/karakter.glb")
 const CHAR_SHADER := preload("res://shaders/toon_char.gdshader")
 const STATES := ["ride", "push", "push_ret", "brake", "crouch", "air", "ollie", "flip", "grind", "walk", "run", "stand_idle", "mount", "dismount", "dus", "tutun", "yaya_hava", "yaya_dus", "cantaya_at", "canta_ac", "canta_kapat", "canta_acik",
-	"yaya_zipla", "yaya_inis", "eline_al", "cantaya_koy", "havada_cirpin", "otur", "muzik_cikar", "muzik_bak", "muzik_koy", "muzik_cikar_kisa", "muzik_kulaklik_cikar"]
-const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "ride_tuck", "brake", "air", "grind", "grind_down", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut", "otur", "muzik_bak"]
+	"yaya_zipla", "yaya_inis", "eline_al", "cantaya_koy", "havada_cirpin", "otur", "muzik_cikar", "muzik_bak", "muzik_koy", "muzik_cikar_kisa", "muzik_kulaklik_cikar",
+	"ucus"]
+const LOOPING := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "ride_tuck", "brake", "air", "grind", "grind_down", "walk", "run", "stand_idle", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "elde_tut", "otur", "muzik_bak", "ucus"]
+## Duvar sürtünmesinde görsel duvara doğru bu kadar yatar (kaykay duvara yaslı, dik)
+const DUVAR_EGIM := deg_to_rad(55.0)
 ## Ollie animasyonunda fiziksel sıçramanın olduğu an (karakter_rig.py OLLIE_POP_FRAME / 30)
 const OLLIE_POP_TIME := 0.1
 ## İtmeden dönüş (ayak kaykaya geri biner): karakter_rig.py PUSH_RET_FRAMES / 30
@@ -195,9 +198,13 @@ func _physics_process(delta: float) -> void:
 	_ollie_t += delta
 	_air_t = 0.0 if (controller.grounded or controller.grinding) else _air_t + delta
 	_align(delta)
-	# Bankta: görsel gövdeden oturağa kayar (gövde bankın önünde kalır)
-	var sit_local := controller.global_basis.orthonormalized().inverse() * controller.sit_offset
-	position = position.lerp(sit_local, 1.0 - exp(-9.0 * delta))
+	# Bankta: görsel gövdeden oturağa kayar (gövde bankın önünde kalır). Duvarda: kaykay duvara
+	# değsin diye görsel duvara doğru kayar
+	var off := controller.sit_offset
+	if controller.wallriding:
+		off += -controller.wall_normal * 0.2 + Vector3.UP * 0.25
+	var sit_local := controller.global_basis.orthonormalized().inverse() * off
+	position = position.lerp(sit_local, 1.0 - exp(-12.0 * delta))
 	_update_animation()
 	_update_arm_sway(delta)
 	_update_sparks()
@@ -206,6 +213,10 @@ func _physics_process(delta: float) -> void:
 func _align(delta: float) -> void:
 	var up := controller.ground_normal
 	var fwd := controller.forward_on_ground
+	if controller.wallriding:
+		# Kaykay duvara yaslı: gövde duvardan dışa yatar, ayaklar (kaykay) duvarda
+		up = (controller.wall_normal * sin(DUVAR_EGIM) + Vector3.UP * cos(DUVAR_EGIM)).normalized()
+		fwd = controller.wall_dir
 	fwd = (fwd - up * fwd.dot(up)).normalized()
 	if fwd.length_squared() < 0.5:
 		return
@@ -240,7 +251,7 @@ func _align(delta: float) -> void:
 ## Aynalanan kaykay animasyonları (tools/blender/karakter_rig.py AYNALANACAK ile aynı)
 const AYNA := ["ride_idle", "ride_fast", "ride_turn_l", "ride_turn_r", "ride_ready", "push", "push_ret",
 	"ride_tuck", "brake", "crouch", "air", "ollie", "flip", "grind", "grind_down", "mount",
-	"dismount", "sarsil", "dus", "tutun"]
+	"dismount", "sarsil", "dus", "tutun", "ucus"]
 var _anim_orig := {}
 var _anim_ayna := {}
 
@@ -340,7 +351,7 @@ func _setup_animation() -> void:
 		bt.connect_node(st + "_seek", 0, st + "_anim")
 		bt.connect_node("state", STATES.find(st), st + "_seek")
 
-	for st in ["brake", "crouch", "air", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "otur", "muzik_bak"]:
+	for st in ["brake", "crouch", "air", "stand_idle", "mount", "dismount", "tutun", "yaya_hava", "canta_acik", "havada_cirpin", "otur", "muzik_bak", "ucus"]:
 		bt.add_node(st, anim.call(st))
 		bt.connect_node("state", STATES.find(st), st)
 
@@ -449,10 +460,16 @@ func _update_animation() -> void:
 			_tree.set("parameters/walk_scale/scale", clampf(v / walk_anim_speed, 0.4, 2.5))
 		else:
 			st = "stand_idle"
+	elif controller.wallriding:
+		st = "ucus"
+		_special = ""
 	elif controller.grinding:
 		st = "grind"
 	elif _special != "":
 		st = _special
+	elif controller.ramp_flight and not controller.grounded:
+		# Rampadan uçuş: derin çökme, iki el kaykayda; yere değene kadar
+		st = "ucus"
 	elif not controller.grounded and (_air_t > 0.12 or _ollie_t < 0.3):
 		# Kısa kopmalarda (tümsek, kenar) hava pozuna geçme: titremeyi önler
 		st = "air"
@@ -667,8 +684,11 @@ func _build_sparks() -> void:
 
 
 func _update_sparks() -> void:
-	_sparks.emitting = controller.grinding
+	_sparks.emitting = controller.grinding or controller.wallriding
 	if controller.grinding:
 		var back := -controller.grind_dir
 		if absf(back.y) < 0.99:
 			_sparks.global_basis = Basis.looking_at(back, Vector3.UP)
+	elif controller.wallriding:
+		# Duvarda: tekerleklerin duvara değdiği yerden geriye
+		_sparks.global_basis = Basis.looking_at(-controller.wall_dir, Vector3.UP)

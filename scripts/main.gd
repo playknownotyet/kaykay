@@ -160,14 +160,15 @@ func _ready() -> void:
 	ui.add_child(hud)
 	hud.setup(player, camera, visual, fx, look, touch)
 
-	# İlk açılış: kaykay eli (sağlak / solak) hiç seçilmediyse sor
-	if not SkateInput.el_secildi:
-		var el_layer := CanvasLayer.new()
-		el_layer.layer = 20
-		add_child(el_layer)
-		var el := preload("res://scripts/ui/el_secimi.gd").new()
-		el.player = player
-		el_layer.add_child(el)
+	# Rampa yeteneği: buton direksiyonun üstünde; rampa dünyada (dış mekânla birlikte gizlenir)
+	var rampa := RampaYetenek.new()
+	rampa.name = "Rampa"
+	rampa.player = player
+	rampa.camera = camera
+	world.add_child(rampa)
+	interiors.outside.append(rampa)
+	touch.rampa = rampa
+	rampa.denied.connect(touch.rampa_denied)
 
 	# Navigasyon: harita ve hedef işareti (HUD'un altında, hedef işareti dünyanın üstünde)
 	var nav := Navigasyon.new()

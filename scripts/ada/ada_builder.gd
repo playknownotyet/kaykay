@@ -523,6 +523,7 @@ func _build_barrier() -> void:
 	var verts := PackedVector3Array()
 	var idx := PackedInt32Array()
 	var faces := PackedVector3Array()
+	var wall_faces := PackedVector3Array()   # görünmez duvar ayrı gövdede (duvar sürtünmesi / tutunma yok)
 	for run in data.barrier:
 		var n: int = run.size()
 		var rings: Array = []          # her noktada profil köşeleri
@@ -568,7 +569,7 @@ func _build_barrier() -> void:
 			var wb := p3(p[0] + nrm.x * 0.32, p[1] + nrm.y * 0.32, p[2])
 			wall.append([wb, wb + Vector3(0, 3.5, 0)])
 		for i in n - 1:
-			faces.append_array([wall[i][0], wall[i + 1][0], wall[i][1], wall[i][1], wall[i + 1][0], wall[i + 1][1]])
+			wall_faces.append_array([wall[i][0], wall[i + 1][0], wall[i][1], wall[i][1], wall[i + 1][0], wall[i + 1][1]])
 		# Grind rayları: üst ortası, ~5 m'lik parçalar uç uca
 		var seg_start := p3(run[0][0], run[0][1], run[0][2] + H)
 		var acc := 0.0
@@ -585,6 +586,7 @@ func _build_barrier() -> void:
 	_mesh_node(_mesh(verts, idx), COL_BARRIER, "Bariyer")
 	faces.append_array(_faces(verts, idx))
 	_body("BariyerCarpisma", "beton", faces)
+	_body("GorunmezDuvar", "beton", wall_faces).set_meta("gorunmez", true)
 
 
 ## Dörtgen, kendi köşeleriyle; ön yüzü "inside" noktasından uzağa bakar

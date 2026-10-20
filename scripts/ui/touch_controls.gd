@@ -6,6 +6,7 @@ extends Control
 ##   Sağ yarı (el): yüzen joystick (x = direksiyon); hızlıca yukarı fırlat = ollie
 ##   (Sağlak ayarında yarılar yer değiştirir: ayak sağda, direksiyon solda; SkateInput.sag_el)
 ##   İkon butonlar: kaykaydan in (sağ üst), arabaya tutun / bırak (yalnız uygunken)
+##   Rampa butonu (direksiyonun üstünde, çevresinde dolum halkası): önde yerden rampa çıkarır
 ##   Bakış joystick'i (inme butonunun altında, kamera ikonlu): hangi yöne çekilirse o yana bakar, bırakınca
 ##   kendiliğinden ortaya döner (kısa bakışlar için)
 ## Yayayken:
@@ -30,7 +31,7 @@ const FLICK_FROM := 0.35
 const FLICK_TO := 0.85
 
 enum Zone { LEFT, RIGHT, BUTTON, CAM, PEEK }
-const ROUND := ["zipla", "bin", "koy"]
+const ROUND := ["zipla", "bin", "koy", "rampa"]
 
 
 func _is_round(name: String) -> bool:
@@ -49,6 +50,13 @@ var _pressed := {}                # buton adı -> dokunuş indeksi
 var _cam_owner := -1              # yaya: kamerayı çeviren parmak
 var _peek_owner := -1             # kaykay: göz butonunu tutan parmak
 var _peek_v := Vector2.ZERO       # bakış topuzunun kayması (birim daire; y yukarı +)
+var rampa: RampaYetenek            # rampa yeteneği (buton, dolum halkası)
+var _rampa_shake := 0.0           # açılamayınca buton titrer
+
+
+## Rampa açılamadı (engel çok yakın / havada): buton kısa titrer
+func rampa_denied() -> void:
+	_rampa_shake = 0.35
 
 
 func _ready() -> void:
@@ -56,8 +64,9 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	GuvenliAlan.fit(self)       # butonlar ve joystick'ler güvenli alanın içinde
+	_rampa_shake = maxf(_rampa_shake - delta, 0.0)
 	queue_redraw()
 
 
@@ -130,6 +139,17 @@ func _buttons() -> Dictionary:
 			var s := h * 0.15
 			var pr := _peek_rect()
 			out["tutun"] = [Rect2(size.x - m - s, pr.end.y + h * 0.04, s, s), "birak" if player.skitch_car else "tutun"]
+		if rampa and not busy:
+			# Direksiyon joystick'inin dinlenme yerinin üstünde (solakta sağda, sağlakta solda)
+			var rd := h * 0.15
+			var jr := _joy_radius()
+			var rest := _joy_rest()
+			var side := -1.0 if not SkateInput.sag_el else 1.0
+			var rc := Vector2(rest.x + side * jr * 0.5, rest.y - jr - h * 0.05 - rd * 0.5)
+			rc.x += sin(_rampa_shake * 70.0) * _rampa_shake * h * 0.08
+			var usable := rampa.can_use()
+			out["rampa"] = [Rect2(rc - Vector2(rd, rd) * 0.5, Vector2(rd, rd)), "rampa",
+				Color(1, 1, 1, 0.95) if usable else Color(1, 1, 1, 0.35)]
 	return out
 
 
@@ -144,6 +164,8 @@ func _press_button(name: String) -> void:
 			SkateInput.request_board_toggle()
 		"tutun":
 			SkateInput.request_skitch()
+		"rampa":
+			SkateInput.request_rampa()
 		"koy":
 			player.stow_held()
 
@@ -482,8 +504,29 @@ func _draw() -> void:
 		if _is_round(name):
 			var col: Color = btns[name][2] if btns[name].size() > 2 else Color(1, 1, 1, 0.95)
 			PixelArt.draw_round_button(self, btns[name][0], btns[name][1], _pressed.has(name), Color(1.0, 0.82, 0.25), col)
+			if name == "rampa":
+				_draw_rampa_ring(btns[name][0])
 		else:
 			PixelArt.draw_button(self, btns[name][0], btns[name][1], _pressed.has(name))
+
+
+## Rampa butonunun dolum halkası: koyu iz, üstünde tepeden saat yönünde dolan turuncu yay;
+## doluyken hafifçe nabız gibi parlar
+func _draw_rampa_ring(r: Rect2) -> void:
+	var c := r.get_center()
+	var h := get_rect().size.y
+	var w := maxf(h * 0.014, 3.0)
+	var rad := r.size.x * 0.5 + w * 0.9
+	var k := clampf(rampa.charge, 0.0, 1.0)
+	draw_arc(c, rad, 0.0, TAU, 48, Color(0, 0, 0, 0.45), w + 2.0)
+	if k <= 0.0:
+		return
+	var full := k >= 1.0
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.006) if full else 0.0
+	var col := Color(1.0, 0.62, 0.18).lerp(Color(1.0, 0.9, 0.5), pulse * 0.6)
+	if not rampa.can_use():
+		col.a = 0.45
+	draw_arc(c, rad, -PI * 0.5, -PI * 0.5 + TAU * k, maxi(int(48 * k), 4), col, w)
 
 
 ## Joystick: halka, ölü bölge, topuz. Kamera joystick'inde dört yön oku (dönmeyi anlatır)
