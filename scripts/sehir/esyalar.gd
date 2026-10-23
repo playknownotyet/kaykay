@@ -87,6 +87,57 @@ const TURLER := {
 		"silindir": [0.58, 1.5],
 		"yuzey": "metal", "uzak": 180.0,
 	},
+	"posta_kutusu": {
+		"kutular": [[Vector3(0, 0.625, 0), Vector3(0.5, 1.25, 0.45)]],
+		"yuzey": "metal", "uzak": 140.0,
+	},
+	"bufe": {
+		"kutular": [[Vector3(0, 1.35, 0), Vector3(2.2, 2.7, 1.8)]],
+		"raylar": [[Vector3(-1.05, 0.9, 0.9), Vector3(1.05, 0.9, 0.9)], [Vector3(-1.1, 2.72, 0.9), Vector3(1.1, 2.72, 0.9)]],
+		"yuzey": "metal", "uzak": 220.0,
+	},
+	"trafik_konisi": {
+		"silindir": [0.17, 0.6],
+		"yuzey": "metal", "uzak": 110.0,
+	},
+	"cop_konteyneri": {
+		"kutular": [[Vector3(0, 0.65, 0), Vector3(1.4, 1.3, 1.0)]],
+		"raylar": [[Vector3(-0.68, 1.3, 0.48), Vector3(0.68, 1.3, 0.48)], [Vector3(-0.68, 1.3, -0.48), Vector3(0.68, 1.3, -0.48)]],
+		"yuzey": "metal", "uzak": 150.0,
+	},
+	"icecek_otomati": {
+		"kutular": [[Vector3(0, 0.95, 0), Vector3(0.9, 1.9, 0.8)]],
+		"yuzey": "metal", "uzak": 160.0,
+	},
+	"halat_babasi": {
+		"silindir": [0.2, 0.55],
+		"yuzey": "metal", "uzak": 120.0,
+	},
+	"balikci_kasasi": {
+		"kutular": [[Vector3(0, 0.35, 0), Vector3(1.2, 0.7, 0.8)]],
+		"yuzey": "tahta", "uzak": 120.0,
+	},
+	"sandal": {
+		"kutular": [[Vector3(0, 0.35, 0), Vector3(3.6, 0.7, 1.4)]],
+		"raylar": [[Vector3(-1.6, 0.7, 0.72), Vector3(1.4, 0.7, 0.72)], [Vector3(-1.6, 0.7, -0.72), Vector3(1.4, 0.7, -0.72)]],
+		"yuzey": "tahta", "uzak": 200.0,
+	},
+	"bisiklet": {
+		"kutular": [[Vector3(0, 0.5, 0), Vector3(1.6, 1.0, 0.25)]],
+		"yuzey": "metal", "uzak": 120.0,
+	},
+	# Ahşap iskele modülleri: kökü kazık altında, döşeme üstü 2,5 m; boyu X (denize doğru +X)
+	"iskele_modul": {
+		"kutular": [[Vector3(0, 2.375, 0), Vector3(4.0, 0.25, 4.8)], [Vector3(0, 3.0, 2.3), Vector3(4.0, 1.0, 0.14)],
+			[Vector3(0, 3.0, -2.3), Vector3(4.0, 1.0, 0.14)]],
+		"yuzey": "tahta", "uzak": 260.0,
+	},
+	"iskele_uc": {
+		"kutular": [[Vector3(0, 2.375, 0), Vector3(4.0, 0.25, 4.8)], [Vector3(0, 3.0, 2.3), Vector3(4.0, 1.0, 0.14)],
+			[Vector3(0, 3.0, -2.3), Vector3(4.0, 1.0, 0.14)], [Vector3(1.95, 3.0, 1.6), Vector3(0.14, 1.0, 1.6)],
+			[Vector3(1.95, 3.0, -1.6), Vector3(0.14, 1.0, 1.6)]],
+		"yuzey": "tahta", "uzak": 260.0,
+	},
 	"kasa": {
 		"kutular": [[Vector3(0, 0.13, 0), Vector3(0.5, 0.26, 0.4)]],
 		"yuzey": "tahta", "uzak": 120.0,
@@ -114,6 +165,18 @@ const ESKI := {
 	"fire_hydrant": "yangin_muslugu", "planter_box_01": "saksi", "plastic_crate_02": "kasa", "barrel_03": "varil",
 }
 
+## Tür çeşitleri (assets/props/argon/<tür>_<çeşit>.glb; çarpışma / ray aynı türden). Eşya konumuna göre
+## sabit seçilir: yan yana duranlar farklı renkte, her açılışta aynı
+const CESITLER := {
+	"saksi": ["2", "3"], "cop_kutusu": ["2"], "kafe_seti": ["2", "3"], "sezlong_semsiye": ["2"],
+	"oturak_saksi": ["2"], "bank": ["metal"], "sokak_lambasi": ["cift"],
+}
+## Çeşide özel görsel ayarları (çarpışma ve raylar türden gelir)
+const CESIT_AYAR := {
+	# Direk ortada, iki yanda fener
+	"sokak_lambasi_cift": {"kayma": Vector3.ZERO, "isiklar": [Vector3(-0.5, 3.05, 0), Vector3(0.5, 3.05, 0)]},
+}
+
 static var instance: Esyalar
 var benches: Banklar
 var level: Node
@@ -130,6 +193,7 @@ func _ready() -> void:
 		var d: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(VERI))
 		items = d.get("items", [])
 	_eskileri_degistir()
+	_eski_iskeleler()
 	_build()
 
 
@@ -144,8 +208,12 @@ func _eskileri_degistir() -> void:
 	if yeni.is_empty():
 		return
 	var ada: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://assets/ada/ada.json"))
+	var yeni_iskele := ResourceLoader.exists(MODEL % "iskele_modul")
 	for q in ada.get("street", {}).get("props", []):
 		if not yeni.has(q.t):
+			continue
+		# Eski variller eski (geniş) iskelenin üstündeydi; yeni iskelede yerleştirici koyar
+		if yeni_iskele and q.t == "barrel_03":
 			continue
 		# ada_builder ile aynı: konum (x, h, -y), -Z bakış yönü f; model önü +Z = -f
 		var f := Vector3(float(q.f[0]), 0.0, -float(q.f[1])).normalized()
@@ -162,9 +230,35 @@ func _eskileri_degistir() -> void:
 		benches.remove_tagged("")
 
 
+## Adanın eski kutu iskeleleri: modüler iskele modeli varsa kaldırılır (yerine iskele_modul öğeleri)
+func _eski_iskeleler() -> void:
+	if level == null or not ResourceLoader.exists(MODEL % "iskele_modul"):
+		return
+	for c in level.get_children():
+		if String(c.name).begins_with("Iskele_"):
+			if c is CollisionObject3D:
+				(c as CollisionObject3D).collision_layer = 0
+			c.queue_free()
+
+
+## Eşyanın model adı: türü ya da konumuna göre seçilen çeşidi (modeli varsa)
+func _model_adi(t: String, pos: Vector3) -> String:
+	var cs: Array = []
+	for c in CESITLER.get(t, []):
+		if ResourceLoader.exists(MODEL % (t + "_" + c)):
+			cs.append(t + "_" + c)
+	if cs.is_empty():
+		return t
+	var h := absi(int(floorf(pos.x * 7.31) * 73856093) ^ int(floorf(pos.z * 5.17) * 19349663))
+	var k := h % (cs.size() + 1)
+	return t if k == 0 else String(cs[k - 1])
+
+
 func _build() -> void:
 	var groups := {}
 	var rails := []                       # [a, b, yüzey]
+	var heads: Array[Vector3] = []        # gece ışıkları: lamba fenerleri ve altlarındaki zemin
+	var grounds: Array[Vector3] = []
 	for it in items:
 		var t := String(it.t)
 		if not TURLER.has(t) or not ResourceLoader.exists(MODEL % t):
@@ -172,10 +266,17 @@ func _build() -> void:
 		var spec: Dictionary = TURLER[t]
 		var pos := Vector3(it.p[0], it.p[1], it.p[2])
 		var xf := Transform3D(Basis(Vector3.UP, deg_to_rad(float(it.r))), pos)
-		var key := "%s|%d|%d" % [t, floori(pos.x / CHUNK), floori(pos.z / CHUNK)]
+		var model := _model_adi(t, pos)
+		var key := "%s|%d|%d" % [model, floori(pos.x / CHUNK), floori(pos.z / CHUNK)]
 		if not groups.has(key):
-			groups[key] = {"t": t, "items": []}
-		groups[key].items.append(xf * Transform3D(Basis(), spec.get("kayma", Vector3.ZERO)))
+			groups[key] = {"t": t, "model": model, "items": []}
+		var ayar: Dictionary = CESIT_AYAR.get(model, {})
+		groups[key].items.append(xf * Transform3D(Basis(), ayar.get("kayma", spec.get("kayma", Vector3.ZERO))))
+		var isiklar: Array = ayar.get("isiklar", [spec.isik] if spec.has("isik") else [])
+		for li in isiklar:
+			var hp: Vector3 = xf * (li as Vector3)
+			heads.append(hp)
+			grounds.append(Vector3(hp.x, pos.y, hp.z))
 		if not groups[key].has("govde"):
 			groups[key]["govde"] = []
 		groups[key].govde.append(xf)
@@ -197,17 +298,6 @@ func _build() -> void:
 		var gr := GrindRail.new()
 		add_child(gr)
 		gr.setup(r[0], r[1], r[2])
-	# Gece ışıkları: lamba başları ve altlarındaki zemin
-	var heads: Array[Vector3] = []
-	var grounds: Array[Vector3] = []
-	for it in items:
-		var spec: Dictionary = TURLER.get(String(it.t), {})
-		if not spec.has("isik") or not ResourceLoader.exists(MODEL % it.t):
-			continue
-		var xf := Transform3D(Basis(Vector3.UP, deg_to_rad(float(it.r))), Vector3(it.p[0], it.p[1], it.p[2]))
-		var h: Vector3 = xf * (spec.isik as Vector3)
-		heads.append(h)
-		grounds.append(Vector3(h.x, float(it.p[1]), h.z))
 	if not heads.is_empty():
 		lamps = LambaIsiklari.new()
 		lamps.name = "LambaIsiklari"
@@ -225,10 +315,10 @@ func _group(g: Dictionary) -> void:
 		center += tf.origin
 	center /= tfs.size()
 	var mmi := MultiMeshInstance3D.new()
-	mmi.name = "Esya_%s_%d" % [t, get_child_count()]
+	mmi.name = "Esya_%s_%d" % [g.model, get_child_count()]
 	mmi.position = center
 	mmi.set_script(PROP_SCRIPT)
-	mmi.set("model_path", MODEL % t)
+	mmi.set("model_path", MODEL % g.model)
 	var rel: Array[Transform3D] = []
 	for tf: Transform3D in tfs:
 		rel.append(Transform3D(tf.basis, tf.origin - center))

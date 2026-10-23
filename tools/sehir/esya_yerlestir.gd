@@ -22,10 +22,25 @@ const TURLER := {
 	"elektrik_kutusu": [Vector2(0.9, 0.4), 1.2],
 	"cati_klima": [Vector2(1.1, 0.7), 0.8],
 	"su_deposu": [Vector2(1.2, 1.2), 1.5],
+	"posta_kutusu": [Vector2(0.5, 0.45), 1.25],
+	"bufe": [Vector2(2.2, 1.8), 2.7],
+	"trafik_konisi": [Vector2(0.4, 0.4), 0.6],
+	"cop_konteyneri": [Vector2(1.4, 1.0), 1.3],
+	"icecek_otomati": [Vector2(0.9, 0.8), 1.9],
+	"halat_babasi": [Vector2(0.45, 0.45), 0.55],
+	"balikci_kasasi": [Vector2(1.2, 0.8), 0.7],
+	"sandal": [Vector2(4.0, 1.6), 1.0],
+	"bisiklet": [Vector2(1.7, 0.5), 1.0],
+	"iskele_modul": [Vector2(4.0, 4.8), 3.5],
+	"iskele_uc": [Vector2(4.0, 4.8), 3.5],
+	"varil": [Vector2(0.62, 0.62), 0.93],
 }
+## Yeni iskele (modüllerle): en ve döşeme yüksekliği (modelin kazık altından döşeme üstüne)
+const ISKELE_EN := 4.8
+const ISKELE_DOSEME := 2.5
 ## Üstüne eşya konabilecek zeminler (yol / kavşak değil)
-const ZEMIN := ["KaldirimCarpisma", "MeydanCarpisma", "AraziCarpisma"]
-const DUZ_ZEMIN := ["KaldirimCarpisma", "MeydanCarpisma"]
+const ZEMIN := ["KaldirimCarpisma", "MeydanCarpisma", "AraziCarpisma", "Iskele_0", "Iskele_1"]
+const DUZ_ZEMIN := ["KaldirimCarpisma", "MeydanCarpisma", "Iskele_0", "Iskele_1"]
 
 var space: PhysicsDirectSpaceState3D
 var placed: Array = []          # [tur, Vector3, yaw]
@@ -59,6 +74,8 @@ func _ready() -> void:
 	_kaldirim_susleri(ada)
 	_meydan_tezgahlari(ada)
 	_catilar(sehir)
+	_iskeleler(ada)
+	_sokak_ayrintilari(ada, sehir)
 	var out := []
 	for p in placed:
 		if p.size() > 3:
@@ -398,6 +415,10 @@ func _kumsal(ada: Dictionary) -> void:
 				if _koy("sezlong_semsiye", pos.x, pos.z, _yaw(out), false, 0.3):
 					toplam += 1
 					konan = true
+					# Her dördüncü setin biraz ilerisine kıyıya çekilmiş bir sandal
+					if toplam % 4 == 0:
+						var sp: Vector3 = pos + out.cross(Vector3.UP) * 6.0 + out * 1.0
+						_koy("sandal", sp.x, sp.z, _yaw(out.cross(Vector3.UP)), false, 0.3)
 					break
 			s += 14.0 if konan else 6.0
 
@@ -449,6 +470,11 @@ func _meydan_tezgahlari(ada: Dictionary) -> void:
 		var base := ap(pier.x, pier.y)
 		var p := base + Vector3(3.5, 0, 2.0)
 		_koy("simit_arabasi", p.x, p.z, 0.0, false, 0.3)
+	# Meydanın kenarında büfeler (kaldırımlar dar; meydan geniş)
+	for a: float in [1.45, 3.3, 5.3]:
+		var radial := Vector3(cos(a), 0, sin(a))
+		var p := c + radial * 21.0
+		_koy("bufe", p.x, p.z, _yaw(-radial), true, 0.3)
 
 
 # ---------- Düz çatılarda klima üniteleri (rampayla çatıya çıkılabiliyor) ----------
@@ -489,3 +515,157 @@ func _catilar(sehir: Dictionary) -> void:
 				placed.append([tur, pos, yaw])
 				sayac[tur] = int(sayac.get(tur, 0)) + 1
 				toplam += 1
+
+
+# ---------- İskele: kumsal kıyısından denize 4 m'lik modüller, ucunda uç parçası; üstünde kasalar,
+# kara ucunda halat babaları ve kıyıya çekilmiş sandallar ----------
+
+func _iskeleler(ada: Dictionary) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 21
+	var excl: Array[RID] = []
+	for n in get_tree().root.find_children("Iskele_*", "StaticBody3D", true, false):
+		excl.append((n as CollisionObject3D).get_rid())
+	for pier in ada.get("piers", []):
+		var a := float(pier.angle)
+		var ax := Vector3(cos(a), 0, -sin(a))
+		var az := Vector3(sin(a), 0, cos(a))
+		var c := ap(pier.x, pier.y)
+		var L := float(pier.length)
+		var h := float(pier.h)
+		# Kara ucu: iskelenin altında (iskele sayılmadan) yüksek zemin olan uç
+		var u0: Vector3 = c - ax * (L * 0.5)
+		var u1: Vector3 = c + ax * (L * 0.5)
+		var y0 := _alt_zemin(u0, excl)
+		var y1 := _alt_zemin(u1, excl)
+		var kara := u0 if y0 > y1 else u1
+		var deniz_yon := ax if y0 > y1 else -ax
+		# Karadan denize: yol / kaldırım / meydan bitene kadar ilerle
+		var s0 := 0.0
+		var son_yol := -1.0
+		var k := 0.0
+		while k < L * 0.6:
+			var p: Vector3 = kara + deniz_yon * k
+			var nm := _alt_zemin_adi(p, excl)
+			if nm.begins_with("Yol") or nm.begins_with("Kavsak") or nm == "KaldirimCarpisma" or nm == "MeydanCarpisma" or nm.begins_with("Bariyer"):
+				son_yol = k
+			k += 0.5
+		s0 = son_yol + 1.0
+		var yaw := atan2(-deniz_yon.z, deniz_yon.x)
+		var n := int(floorf((L - s0) / 4.0))
+		for m in n:
+			var mc: Vector3 = kara + deniz_yon * (s0 + 2.0 + m * 4.0)
+			var tur := "iskele_uc" if m == n - 1 else "iskele_modul"
+			placed.append([tur, Vector3(mc.x, h - ISKELE_DOSEME, mc.z), yaw])
+			sayac[tur] = int(sayac.get(tur, 0)) + 1
+		var bas: Vector3 = kara + deniz_yon * s0
+		# Üstünde balıkçı kasaları (döşemenin ilk yarısında)
+		for i in 3:
+			var p: Vector3 = bas + deniz_yon * rng.randf_range(3.0, (L - s0) * 0.5) + az * rng.randf_range(-1.2, 1.2)
+			placed.append(["balikci_kasasi", Vector3(p.x, h, p.z), yaw + rng.randf_range(-0.4, 0.4)])
+			sayac["balikci_kasasi"] = int(sayac.get("balikci_kasasi", 0)) + 1
+		# Döşemenin kenarına yakın birkaç varil
+		for i in 2:
+			var p: Vector3 = bas + deniz_yon * rng.randf_range(6.0, (L - s0) * 0.8) + az * (1.6 if i == 0 else -1.6)
+			placed.append(["varil", Vector3(p.x, h, p.z), rng.randf() * TAU])
+			sayac["varil"] = int(sayac.get("varil", 0)) + 1
+		# Kara ucunda, iskele başının iki yanında halat babaları
+		for sg: float in [-1.0, 1.0]:
+			for j in 2:
+				var p: Vector3 = bas - deniz_yon * (0.6 + j * 1.8) + az * sg * (ISKELE_EN * 0.5 + 0.6)
+				_koy("halat_babasi", p.x, p.z, 0.0, false, 0.02)
+		# Kıyıya çekilmiş sandallar: iskele başının iki yanında kumsalda
+		for sg: float in [-1.0, 1.0]:
+			for j in 2:
+				var p: Vector3 = bas + az * sg * (ISKELE_EN * 0.5 + 4.0 + j * 3.2) + deniz_yon * rng.randf_range(1.0, 5.0)
+				_koy("sandal", p.x, p.z, yaw + rng.randf_range(-0.3, 0.3), false, 0.3)
+
+
+func _alt_zemin(p: Vector3, excl: Array[RID]) -> float:
+	var q := PhysicsRayQueryParameters3D.create(Vector3(p.x, 300, p.z), Vector3(p.x, -50, p.z), 0xFFFFFFFF, excl)
+	var hit := space.intersect_ray(q)
+	return (hit.position as Vector3).y if not hit.is_empty() else -10.0
+
+
+func _alt_zemin_adi(p: Vector3, excl: Array[RID]) -> String:
+	var q := PhysicsRayQueryParameters3D.create(Vector3(p.x, 300, p.z), Vector3(p.x, -50, p.z), 0xFFFFFFFF, excl)
+	var hit := space.intersect_ray(q)
+	return String((hit.collider as Node).name) if not hit.is_empty() else ""
+
+
+# ---------- Sokak ayrıntıları: posta kutusu, büfe, koni grupları, konteyner, otomat, bisiklet ----------
+
+func _sokak_ayrintilari(ada: Dictionary, sehir: Dictionary) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 33
+	var koni_grup := 0
+	for run in ada.sidewalks:
+		var rid := String(run.road)
+		if rid == "ada" or rid == "plaza":
+			continue
+		var pts: Array = run.pts
+		var line := []
+		for p: Array in pts:
+			var a := ap(p[0], p[1])
+			var b := ap(p[2], p[3])
+			var out := b - a
+			out.y = 0
+			if out.length() < 0.5:
+				continue
+			line.append([a, b, out.normalized()])
+		if line.size() < 3:
+			continue
+		var outer := []
+		var inner := []
+		for e in line:
+			outer.append([(e[1] as Vector3) - (e[2] as Vector3) * 0.6, e[2]])
+			inner.append([(e[0] as Vector3) + (e[2] as Vector3) * 0.45, e[2]])
+		var L := _uzunluk(outer)
+		var s := 25.0 + rng.randf() * 40.0
+		while s < L - 15.0:
+			var np: Array = _nokta(outer, s)
+			var pos: Vector3 = np[0]
+			var out: Vector3 = np[1]
+			var r := rng.randf()
+			var ok := false
+			if r < 0.3:
+				ok = _koy("posta_kutusu", pos.x, pos.z, _yaw(-out), true, 0.05)
+			elif r < 0.45 and rid.begins_with("av"):
+				var bp: Vector3 = pos - out * 0.4
+				ok = _koy("bufe", bp.x, bp.z, _yaw(-out), true, 0.2)
+			elif r < 0.65:
+				ok = _koy("icecek_otomati", pos.x, pos.z, _yaw(-out), true, 0.05)
+			elif r < 0.85:
+				var bk: Vector3 = pos - out * 0.1
+				ok = _koy("bisiklet", bk.x, bk.z, _yaw(-out), true, 0.05)
+			elif koni_grup < 14:
+				# Bordür kenarında üç koni (kaldırım çalışması)
+				var ip: Array = _nokta(inner, s)
+				var base: Vector3 = ip[0]
+				var along: Vector3 = (ip[1] as Vector3).cross(Vector3.UP)
+				var n := 0
+				for j in 3:
+					var cp: Vector3 = base + along * (j - 1) * 1.1
+					if _koy("trafik_konisi", cp.x, cp.z, rng.randf() * TAU, true, 0.02):
+						n += 1
+				ok = n > 0
+				if ok:
+					koni_grup += 1
+			s += (90.0 if ok else 12.0) + rng.randf() * 60.0
+	# Ara sokaklarda konteynerler: Sehir "yol" öğelerinin kenarında
+	for it in sehir.items:
+		if String(it.t) != "yol":
+			continue
+		var pts: Array = it.pts
+		var w := float(it.get("w", 2.6))
+		for i in pts.size() - 1:
+			var a := Vector2(pts[i][0], pts[i][1])
+			var b := Vector2(pts[i + 1][0], pts[i + 1][1])
+			var L := a.distance_to(b)
+			var d := (b - a) / maxf(L, 0.01)
+			var nrm := Vector2(-d.y, d.x)
+			var k := 6.0
+			while k < L - 4.0:
+				var m := a + d * k + nrm * (w * 0.5 + 1.1)
+				_koy("cop_konteyneri", m.x, m.y, atan2(-nrm.x, -nrm.y), false, 0.1)
+				k += 22.0
