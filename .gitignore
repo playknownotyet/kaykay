@@ -20,3 +20,8 @@ native/apple_muzik/godot-cpp/
 native/apple_muzik/bin/
 native/apple_muzik/.sconsign*
 addons/apple_muzik/
+
+# Argon / Flash çıktıları: ajan kayıtları ve önizleme görüntüleri (yeniden üretilebilir)
+art/argon/cikti/_log/
+art/argon/cikti/*/onizleme_*.png
+.DS_Store

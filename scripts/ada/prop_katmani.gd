@@ -5,6 +5,13 @@ extends MultiMeshInstance3D
 ## Malzeme: modelin renk dokusu oyunun toon shader'ıyla (shaders/toon_tex.gdshader).
 
 const TEX_SHADER := preload("res://shaders/toon_tex.gdshader")
+const VC_SHADER := preload("res://shaders/toon_vc.gdshader")
+## Argon'un yaptığı yeni modeller (art/argon -> assets/props/argon/<ad>.glb): varsa eski Poly Haven
+## modelinin yerine geçer. Yeni modeller dokusuz, köşe rengiyle boyalı (toon_vc).
+const YENI_MODEL := {
+	"painted_wooden_bench": "bank", "metal_trash_can": "cop_kutusu", "street_lamp_01": "sokak_lambasi",
+	"fire_hydrant": "yangin_muslugu", "planter_box_01": "saksi", "plastic_crate_02": "kasa", "barrel_03": "varil",
+}
 
 @export var model_path := ""
 ## Örneklerin dönüşümleri (bu düğüme göre)
@@ -31,7 +38,9 @@ func _ready() -> void:
 static func _load(path: String) -> Dictionary:
 	if _cache.has(path):
 		return _cache[path]
-	var scene: PackedScene = load(path)
+	var key := path.get_file().get_basename()
+	var yeni := "res://assets/props/argon/%s.glb" % YENI_MODEL.get(key, key)
+	var scene: PackedScene = load(yeni) if ResourceLoader.exists(yeni) else load(path)
 	if scene == null:
 		return {}
 	var root := scene.instantiate()
@@ -61,9 +70,11 @@ static func _load(path: String) -> Dictionary:
 			tex = m.albedo_texture
 			break
 	var mat := ShaderMaterial.new()
-	mat.shader = TEX_SHADER
 	if tex:
+		mat.shader = TEX_SHADER
 		mat.set_shader_parameter("albedo_tex", tex)
+	else:
+		mat.shader = VC_SHADER
 	root.free()
 	_cache[path] = {"mesh": mesh, "material": mat}
 	return _cache[path]

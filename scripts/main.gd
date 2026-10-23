@@ -141,6 +141,14 @@ func _ready() -> void:
 	peyzaj.look = look
 	world.add_child(peyzaj)
 
+	# Kaykaylanabilir şehir eşyaları (Argon modelleri): sahil bankları, bahçe duvarları, çeşme...
+	var esyalar := Esyalar.new()
+	esyalar.name = "Esyalar"
+	esyalar.benches = benches
+	esyalar.level = level
+	esyalar.player = player
+	world.add_child(esyalar)
+
 	# İç mekân geçişleri: içerideyken dış dünya gizli ve durur
 	var interiors := IcMekan.new()
 	interiors.name = "IcMekan"
@@ -148,7 +156,7 @@ func _ready() -> void:
 	interiors.follow_cam = camera
 	interiors.ui_parent = self
 	interiors.world = world
-	interiors.outside = [level, crowd, traffic, city, benches, peyzaj]
+	interiors.outside = [level, crowd, traffic, city, benches, peyzaj, esyalar]
 	add_child(interiors)
 
 	var ui := CanvasLayer.new()

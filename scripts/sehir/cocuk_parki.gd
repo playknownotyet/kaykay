@@ -114,9 +114,15 @@ static func build(city: Sehir, it: Dictionary, xf: Transform3D, sk: SurfaceTool,
 			mi.visibility_range_end = 170.0
 			city._built.add_child(mi)
 			mi.global_transform = tf
-		city._shape_box(body, Vector3(1.16, 0.89, 0.5), tf * Transform3D(Basis(), Vector3(0, 0.445, 0)))
+		# Şehir eşyalarının bankıyla aynı çarpışma, grind rayı ve oturak (Esyalar.TURLER.bank)
+		var bs: Dictionary = Esyalar.TURLER.bank
+		for k in bs.kutular:
+			city._shape_box(body, k[1], tf * Transform3D(Basis(), k[0]))
+		for r in bs.raylar:
+			city._rail(tf * (r[0] as Vector3), tf * (r[1] as Vector3), "tahta")
 		if Banklar.instance:
-			info.benches.append_array(Banklar.instance.add_bench(tf, "park_%d" % id))
+			var o: Array = bs.oturak
+			info.benches.append_array(Banklar.instance.add_bench(tf, "park_%d" % id, o[0], o[1], o[2], o[3]))
 	var lamp: Dictionary = PROP_SCRIPT._load(LAMP)
 	if not lamp.is_empty():
 		for c: Vector2 in [Vector2(-hw + 0.6, -hd + 0.6), Vector2(hw - 0.6, -hd + 0.6), Vector2(-hw + 0.6, hd - 0.6), Vector2(hw - 0.6, hd - 0.6)]:
@@ -125,7 +131,8 @@ static func build(city: Sehir, it: Dictionary, xf: Transform3D, sk: SurfaceTool,
 			mi.material_override = lamp.material
 			mi.visibility_range_end = 300.0
 			city._built.add_child(mi)
-			mi.global_transform = xf * Transform3D(Basis(), Vector3(c.x, FLOOR, c.y))
+			mi.global_transform = xf * Transform3D(Basis(), Vector3(c.x, FLOOR, c.y)) \
+				* Transform3D(Basis(), Esyalar.TURLER.sokak_lambasi.get("kayma", Vector3.ZERO))
 			var cs := CylinderShape3D.new()
 			cs.radius = 0.13
 			cs.height = 3.8

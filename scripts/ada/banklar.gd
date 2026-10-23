@@ -58,11 +58,13 @@ func _collect(root: Node) -> void:
 
 ## Dışarıdan bank ekle (şehirdeki parklar): tf adadaki bankların dönüşümüyle aynı (köken tabanda,
 ## -Z sırt yönü). tag ile sonradan toplu silinir. Yer kimliklerini döner.
-func add_bench(tf: Transform3D, tag: String) -> Array[int]:
+## Başka bank modelleri (şehir eşyaları) kendi oturak yüksekliğini / yerlerini verir.
+func add_bench(tf: Transform3D, tag: String, xs: Array = SEAT_X, seat_y := SEAT_Y, seat_z := SEAT_Z, front_z := FRONT_Z) -> Array[int]:
 	var ids: Array[int] = []
-	for x in SEAT_X:
+	for x in xs:
 		var id := seats.size()
-		seats.append({"base": tf.origin, "basis": tf.basis.orthonormalized(), "x": x, "tag": tag})
+		seats.append({"base": tf.origin, "basis": tf.basis.orthonormalized(), "x": float(x), "tag": tag,
+			"y": seat_y, "z": seat_z, "front": front_z})
 		var key := _cell(tf.origin)
 		if not _grid.has(key):
 			_grid[key] = []
@@ -94,13 +96,13 @@ func facing(id: int) -> Vector3:
 ## Oturağın üstündeki kalça noktası (dünya)
 func seat_point(id: int) -> Vector3:
 	var s: Dictionary = seats[id]
-	return s.base + s.basis * Vector3(s.x, SEAT_Y, SEAT_Z)
+	return s.base + s.basis * Vector3(s.x, float(s.get("y", SEAT_Y)), float(s.get("z", SEAT_Z)))
 
 
 ## Yerin önünde ayakta durulacak nokta (dünya, bank tabanı yüksekliğinde)
 func front_point(id: int) -> Vector3:
 	var s: Dictionary = seats[id]
-	return s.base + s.basis * Vector3(s.x, 0.0, FRONT_Z)
+	return s.base + s.basis * Vector3(s.x, 0.0, float(s.get("front", FRONT_Z)))
 
 
 func is_free(id: int) -> bool:

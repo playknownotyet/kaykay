@@ -91,6 +91,7 @@ var room_slots: Array = []
 var parks: Array = []
 var _rooms: CanliOdalar
 ## Gece (0..1): odaların bir kısmının ışığı yanar. Gün döngüsü (henüz yok) bunu değiştirecek.
+signal night_changed(v: float)
 var gece := 0.0:
 	set(v):
 		gece = clampf(v, 0.0, 1.0)
@@ -896,6 +897,9 @@ func bina_material() -> ShaderMaterial:
 ## Gece: odaların bir kısmının ışığı yanar (0 gündüz .. 1 gece). Gün döngüsü bunu çağırır.
 func set_night(v: float) -> void:
 	_bina_mat().set_shader_parameter("gece", clampf(v, 0.0, 1.0))
+	# Bütün parlayan yüzler (toon_vc) ve sokak lambası ışıkları (LambaIsiklari) da buna uyar
+	RenderingServer.global_shader_parameter_set("gece", clampf(v, 0.0, 1.0))
+	night_changed.emit(clampf(v, 0.0, 1.0))
 
 
 func _cobble_mat() -> ShaderMaterial:
@@ -1231,7 +1235,9 @@ func _build_bina(it: Dictionary, sb: SurfaceTool) -> void:
 		_ring(sb, xf, w, d, top - 0.25, top - 0.05, 0.12, 0.2, trim)
 		var rp := [xf * Vector3(-hw, top + 0.05, -hd), xf * Vector3(hw, top + 0.05, -hd), xf * Vector3(hw, top + 0.05, hd), xf * Vector3(-hw, top + 0.05, hd)]
 		_quad(sb, rp, [Vector2(0, 0), Vector2(w / 3.0, 0), Vector2(w / 3.0, d / 3.0), Vector2(0, d / 3.0)], Vector3.UP, _fc(style, 0, 4))
-		_roof_props(xf, w, d, top, seed)
+		# Çatı süsleri artık şehir eşyaları (Argon modelleri: klima, su deposu; Esyalar) — eski kutular kapalı
+		if not ResourceLoader.exists("res://assets/props/argon/cati_klima.glb"):
+			_roof_props(xf, w, d, top, seed)
 	# Çarpışma: gövde görünen çatı düzeyine kadar; düz çatıda üstünde korkuluk duvarları (çatıda
 	# durulabilir, korkuluğun içinde yürünür / kayılır), beşik çatıda eğimli çatı prizması
 	var body := _body("beton")

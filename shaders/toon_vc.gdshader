@@ -6,6 +6,9 @@ render_mode specular_disabled;
 
 #include "res://shaders/common.gdshaderinc"
 
+// Gece (0 gündüz .. 1 gece; Sehir.set_night): parlayan yüzler (ampul, lamba camı, neon) gece güçlenir
+global uniform float gece;
+
 
 void vertex() {
 	POSITION = snap_clip(PROJECTION_MATRIX * MODELVIEW_MATRIX * vec4(VERTEX, 1.0), VIEWPORT_SIZE);
@@ -13,7 +16,8 @@ void vertex() {
 
 void fragment() {
 	ALBEDO = COLOR.rgb;
-	EMISSION = COLOR.rgb * (1.0 - COLOR.a) * 1.4;    // alfa < 1: kendiliğinden parlayan (ampul, neon)
+	// alfa < 1: kendiliğinden parlayan (ampul, neon); gündüz hafif, gece parlak
+	EMISSION = COLOR.rgb * (1.0 - COLOR.a) * mix(0.7, 3.0, gece);
 	ROUGHNESS = 0.8;
 }
 

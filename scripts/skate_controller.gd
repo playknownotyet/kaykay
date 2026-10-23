@@ -881,7 +881,7 @@ func _try_latch() -> void:
 	var best_s := 0.0
 	var best_dist := INF
 	var best_align := 0.0
-	for node in get_tree().get_nodes_in_group("grind_rails"):
+	for node in GrindRail.near(p):
 		var rail := node as GrindRail
 		if rail == _last_rail and _last_rail_timer > 0.0:
 			continue
@@ -962,7 +962,7 @@ func _continue_rail() -> bool:
 	var end := _rail.b if _rail_sign > 0.0 else _rail.a
 	var d := _rail.direction * _rail_sign
 	var over := _rail_pos - _rail.length if _rail_sign > 0.0 else -_rail_pos
-	for node in get_tree().get_nodes_in_group("grind_rails"):
+	for node in GrindRail.near(end):
 		var r := node as GrindRail
 		if r == _rail:
 			continue
