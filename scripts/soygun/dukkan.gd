@@ -114,6 +114,20 @@ const PROP_COLLIDE := {
 }
 ## Duvara asılı süsler: yerden yükseklik, çarpışmasız
 const PROP_DUVAR := {"duvar_lambasi": 2.1}
+## İç mekân süsleri (yalnız ic; Flash modelleri, assets/props/argon): [model, konum (x, y, z), yön (derece; ön +Z'den),
+## çarpışma kutusu (boş: yok)]. Ürün / liste sistemine dahil değil, yalnız görünüm.
+const IC_SUS := [
+	["dondurma_dolabi", Vector3(4.55, 0.0, -4.4), -90.0, Vector3(1.4, 0.95, 0.8)],
+	["icecek_dolabi", Vector3(4.6, 0.0, -6.1), -90.0, Vector3(0.85, 2.0, 0.7)],
+	["kasa_arkasi_raf", Vector3(4.8, 0.0, -2.2), -90.0, Vector3.ZERO],
+	["cay_kosesi", Vector3(-4.35, 0.0, -0.75), 90.0, Vector3(1.0, 0.9, 0.8)],
+	["kose_bitkisi", Vector3(4.4, 0.0, -0.55), 0.0, Vector3(0.6, 1.7, 0.6)],
+	["duvar_saati", Vector3(1.8, 2.5, -7.96), 0.0, Vector3.ZERO],
+	["afis_seti", Vector3(-4.97, 2.15, -4.0), 90.0, Vector3.ZERO],
+	["afis_seti", Vector3(4.97, 1.75, -4.4), -90.0, Vector3.ZERO],
+	["reyon_tabelasi", Vector3(-2.2, 2.7, -4.3), 0.0, Vector3.ZERO],
+	["reyon_tabelasi", Vector3(0.6, 2.7, -4.3), 0.0, Vector3.ZERO],
+]
 
 var player: SkateController
 var follow_cam: Camera3D
@@ -231,6 +245,7 @@ func _ready() -> void:
 		_collide(Vector3(2.0, 2.3, 0.25), Transform3D(Basis(), Vector3(0, 1.15, 0.1)))
 		_armed = true
 		return
+	_build_decor()
 	_marker = _build_marker(Vector3(0, 0, -0.5))
 	# İçeriden kapı boşluğu kapalı: iç mekân boşlukta durur, kapıdan dışarı yürünürse düşülürdü.
 	# Çıkış yalnız koniyle (yükleme ekranı); kapı görsel olarak açılır ama geçilmez.
@@ -456,6 +471,25 @@ func _build_outside() -> void:
 		else:
 			_instance(name, xf)
 			_collide_aabb(name, xf, 0.04)
+
+
+## İç mekân süsleri: dondurma ve içecek dolabı, tezgâh arkası raf, çay köşesi, bitki, saat, afişler, tabelalar
+func _build_decor() -> void:
+	for d in IC_SUS:
+		var model: String = d[0]
+		var entry: Dictionary = PROP_SCRIPT._load("res://assets/props/argon/%s.glb" % model)
+		if entry.is_empty():
+			continue
+		var xf := Transform3D(Basis(Vector3.UP, deg_to_rad(float(d[2]))), d[1])
+		var mi := MeshInstance3D.new()
+		mi.mesh = entry.mesh
+		mi.material_override = entry.material
+		mi.transform = xf
+		mi.visibility_range_end = INSIDE_VIS
+		add_child(mi)
+		var sz: Vector3 = d[3]
+		if sz != Vector3.ZERO:
+			_collide(sz, xf * Transform3D(Basis(), Vector3(0, sz.y * 0.5, 0)), "metal")
 
 
 # ---------- Ürünler ve raf bölümleri ----------
