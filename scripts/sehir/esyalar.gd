@@ -138,6 +138,13 @@ const TURLER := {
 			[Vector3(1.95, 3.0, -1.6), Vector3(0.14, 1.0, 1.6)]],
 		"yuzey": "tahta", "uzak": 260.0,
 	},
+	"manav_tezgahi": {"kutular": [[Vector3(0, 0.5, 0), Vector3(1.6, 1.0, 0.8)]], "yuzey": "tahta", "uzak": 110.0},
+	"cicekci_standi": {"kutular": [[Vector3(0, 0.55, 0), Vector3(1.4, 1.1, 0.6)]], "yuzey": "tahta", "uzak": 110.0},
+	"kiyafet_askisi": {"kutular": [[Vector3(0, 0.8, 0), Vector3(1.4, 1.6, 0.5)]], "yuzey": "metal", "uzak": 110.0},
+	"menu_tahtasi": {"kutular": [[Vector3(0, 0.5, 0), Vector3(0.6, 1.0, 0.5)]], "yuzey": "tahta", "uzak": 100.0},
+	"firin_standi": {"kutular": [[Vector3(0, 0.5, 0), Vector3(1.2, 1.0, 0.6)]], "yuzey": "tahta", "uzak": 110.0},
+	"kitap_standi": {"kutular": [[Vector3(0, 0.6, 0), Vector3(1.2, 1.2, 0.6)]], "yuzey": "tahta", "uzak": 110.0},
+	"gazete_standi": {"kutular": [[Vector3(0, 0.8, 0), Vector3(0.6, 1.6, 0.6)]], "yuzey": "metal", "uzak": 110.0},
 	"kasa": {
 		"kutular": [[Vector3(0, 0.13, 0), Vector3(0.5, 0.26, 0.4)]],
 		"yuzey": "tahta", "uzak": 120.0,

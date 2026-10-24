@@ -87,6 +87,9 @@ var _sdet: SurfaceTool               # kurulum sırasında cephe ayrıntıların
 static var _cephe: Dictionary = {}
 ## Gerçek 3D oda kurulabilecek yerler (binaların zemin kat ön cephesi): CanliOdalar okur
 var room_slots: Array = []
+## Sokağa bakan cephelerin pencere / balkon / kapı bölmeleri: {cf (bölmenin sol üst köşesi, x cephe boyunca,
+## y yukarı, z dışa), cw (bölme eni), row (0 pencere, 7 pencere B / balkon, 2 kapı), style, id, fi, i, fl}
+var cephe_slots: Array = []
 ## Çocuk parkları (CocukParki.build): çocukların oynayacağı yerler, salıncaklar, banklar (NpcCrowd okur)
 var parks: Array = []
 var _rooms: CanliOdalar
@@ -922,6 +925,7 @@ func rebuild() -> void:
 	_built.name = "Yapilar"
 	add_child(_built)
 	room_slots.clear()
+	cephe_slots.clear()
 	if Banklar.instance:
 		for pk in parks:
 			Banklar.instance.remove_tagged("park_%d" % int(pk.id))
@@ -1216,6 +1220,10 @@ func _build_bina(it: Dictionary, sb: SurfaceTool) -> void:
 				if fi != 1 and _sdet and (row == 0 or row == 1 or row == 7):
 					var cf := xf * Transform3D(Basis(dir, Vector3.UP, n), p0 + Vector3(0, y1, 0))
 					_facade_parts(cf, cw, style, row)
+				# Cephe eşyaları için yuva (CepheEsyalari: perde, çiçek kutusu, balkon eşyası, kapı)
+				if fi != 1 and not ozel and row in [0, 2, 7]:
+					cephe_slots.append({"cf": xf * Transform3D(Basis(dir, Vector3.UP, n), p0 + Vector3(0, y1, 0)),
+						"cw": cw, "row": row, "style": style, "id": int(it.get("id", 0)), "fi": fi, "i": i, "fl": fl})
 	var trim := _fc(style, 0, 3)
 	# Kaide ve kat silmesi
 	_ring(sb, xf, w, d, ybot, 0.35, 0.05, 0.12, trim)

@@ -34,7 +34,18 @@ const TURLER := {
 	"iskele_modul": [Vector2(4.0, 4.8), 3.5],
 	"iskele_uc": [Vector2(4.0, 4.8), 3.5],
 	"varil": [Vector2(0.62, 0.62), 0.93],
+	"manav_tezgahi": [Vector2(1.6, 0.8), 1.0],
+	"cicekci_standi": [Vector2(1.4, 0.6), 1.1],
+	"kiyafet_askisi": [Vector2(1.4, 0.5), 1.6],
+	"menu_tahtasi": [Vector2(0.6, 0.55), 1.0],
+	"firin_standi": [Vector2(1.2, 0.6), 1.0],
+	"kitap_standi": [Vector2(1.2, 0.6), 1.2],
+	"gazete_standi": [Vector2(0.6, 0.6), 1.6],
 }
+## Zemin katı dükkân olan binalara sabit tür (bina kimliğinden) ve önüne konan teşhir eşyası
+const DUKKAN_TURU := ["manav", "cicekci", "butik", "kafe", "firin", "kitapci", "bakkal"]
+const TESHIR := {"manav": "manav_tezgahi", "cicekci": "cicekci_standi", "butik": "kiyafet_askisi",
+	"kafe": "menu_tahtasi", "firin": "firin_standi", "kitapci": "kitap_standi", "bakkal": "gazete_standi"}
 ## Yeni iskele (modüllerle): en ve döşeme yüksekliği (modelin kazık altından döşeme üstüne)
 const ISKELE_EN := 4.8
 const ISKELE_DOSEME := 2.5
@@ -359,21 +370,31 @@ func _dukkan_onleri(sehir: Dictionary) -> void:
 	for it in sehir.items:
 		if String(it.t) != "bina" or String(it.get("zemin", "")) != "dukkan":
 			continue
-		if rng.randf() > 0.45:
-			continue
+		var id := int(it.get("id", 0))
+		var tur: String = DUKKAN_TURU[(id * 2654435761) % DUKKAN_TURU.size()]
 		var c := Vector2(float(it.p[0]), float(it.p[1]))
 		var b := Basis(Vector3.UP, deg_to_rad(float(it.get("r", 0.0))))
 		var w := float(it.get("w", 9.0))
 		var d := float(it.get("d", 8.0))
-		# Bazı dükkânların önünde kafe masası (kaldırım yeterince genişse)
-		if rng.randf() < 0.35:
-			var kp: Vector3 = b * Vector3(-0.3 * w, 0, d * 0.5 + 1.5)
-			if _koy("kafe_seti", c.x + kp.x, c.y + kp.z, _yaw(b.z), true, 0.1):
-				continue
-		# Ön yüz +Z: cepheden 0,55 m önde, kapıya yer bırakarak iki yanda
-		for sx: float in [-0.32, 0.32]:
-			var lp: Vector3 = b * Vector3(sx * w, 0, d * 0.5 + 0.55)
-			_koy("saksi", c.x + lp.x, c.y + lp.z, _yaw(b.z), true, 0.05)
+		var onde := func(lx: float, uz: float) -> Vector2:
+			var lp: Vector3 = b * Vector3(lx, 0, d * 0.5 + uz)
+			return Vector2(c.x + lp.x, c.y + lp.z)
+		if tur == "kafe":
+			# Kafe: masa seti ve kapı yanında menü tahtası
+			var kp: Vector2 = onde.call(-0.3 * w, 1.5)
+			_koy("kafe_seti", kp.x, kp.y, _yaw(b.z), true, 0.1)
+			var mp: Vector2 = onde.call(0.3 * w, 0.6)
+			_koy("menu_tahtasi", mp.x, mp.y, _yaw(b.z), true, 0.05)
+			continue
+		# Diğerleri: bir vitrinin önünde türünün teşhiri, ötekinin önünde saksı
+		var sx := -1.0 if rng.randf() < 0.5 else 1.0
+		var model: String = TESHIR[tur]
+		var derin: float = (TURLER[model][0] as Vector2).y
+		var tp: Vector2 = onde.call(sx * 0.3 * w, 0.35 + derin * 0.5)
+		_koy(model, tp.x, tp.y, _yaw(b.z), true, 0.05)
+		if rng.randf() < 0.6:
+			var sp: Vector2 = onde.call(-sx * 0.32 * w, 0.55)
+			_koy("saksi", sp.x, sp.y, _yaw(b.z), true, 0.05)
 
 
 # ---------- Kumsal: sahil yolunun altında denize bakan şezlong + şemsiye sıraları ----------

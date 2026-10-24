@@ -93,21 +93,27 @@ const LAYOUT := [
 	["Tezgah", Vector2(2.9, -2.2), -90.0, [[["cikolata"]]]],
 	["Sepetler", Vector2(-1.45, -0.55), 15.0, []],
 ]
-## Dışarıdaki süsler: [şablon, konum (x, z), yön]; "prop:" ile başlayanlar Poly Haven sokak eşyası
+## Dışarıdaki süsler: [şablon, konum (x, z), yön]; "prop:" ile başlayanlar şehir eşyası (Argon / Flash modelleri,
+## assets/props/argon); duvar lambası kapının iki yanında duvarda
 const OUTSIDE := [
 	["MeyveTezgahi", Vector2(-3.0, 0.75), 0.0],
 	["TabelaA", Vector2(1.85, 0.75), -20.0],
 	["GazeteStandi", Vector2(3.7, 0.55), 0.0],
-	["prop:planter_box_01", Vector2(-4.85, 0.45), 0.0],
-	["prop:planter_box_01", Vector2(5.0, 0.45), 0.0],
-	["prop:metal_trash_can", Vector2(5.75, -0.4), 0.0],
-	["prop:plastic_crate_02", Vector2(5.65, -1.4), 90.0],
-	["prop:plastic_crate_02", Vector2(5.65, -2.0), 80.0],
+	["prop:saksi_2", Vector2(-4.85, 0.45), 0.0],
+	["prop:saksi_3", Vector2(5.0, 0.45), 0.0],
+	["prop:cop_kutusu", Vector2(5.75, -0.4), 0.0],
+	["prop:kasa", Vector2(5.65, -1.4), 90.0],
+	["prop:kasa", Vector2(5.65, -2.0), 80.0],
+	["prop:bisiklet", Vector2(-5.9, -1.4), 90.0],
+	["prop:duvar_lambasi", Vector2(-1.25, 0.2), 0.0],
+	["prop:duvar_lambasi", Vector2(1.25, 0.2), 0.0],
 ]
 const PROP_COLLIDE := {
-	"planter_box_01": Vector3(0.93, 0.43, 0.43), "metal_trash_can": Vector3(0.6, 0.9, 0.6),
-	"plastic_crate_02": Vector3(0.51, 0.25, 0.4),
+	"saksi_2": Vector3(0.93, 0.43, 0.43), "saksi_3": Vector3(0.93, 0.43, 0.43), "cop_kutusu": Vector3(0.55, 0.95, 0.55),
+	"kasa": Vector3(0.5, 0.26, 0.4), "bisiklet": Vector3(1.6, 1.0, 0.25),
 }
+## Duvara asılı süsler: yerden yükseklik, çarpışmasız
+const PROP_DUVAR := {"duvar_lambasi": 2.1}
 
 var player: SkateController
 var follow_cam: Camera3D
@@ -439,8 +445,12 @@ func _build_outside() -> void:
 			var mi := MeshInstance3D.new()
 			mi.mesh = entry.mesh
 			mi.material_override = entry.material
+			if PROP_DUVAR.has(key):
+				xf.origin.y += float(PROP_DUVAR[key])
 			mi.transform = xf
 			add_child(mi)
+			if PROP_DUVAR.has(key):
+				continue
 			var sz: Vector3 = PROP_COLLIDE.get(key, Vector3(0.4, 0.5, 0.4))
 			_collide(sz, xf * Transform3D(Basis(), Vector3(0, sz.y * 0.5, 0)), "metal")
 		else:
